@@ -43,6 +43,8 @@ android {
 }
 
 dependencies {
+    implementation("ai.picovoice:porcupine-android:3.0.2")
+
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
