@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import ai.picovoice.porcupine.PorcupineException
 import ai.picovoice.porcupine.PorcupineManager
+import com.example.heylisa.constant.MY_CONSTANT
 
 class PicovoiceWakeWord(
     private val context: Context,
@@ -17,7 +18,7 @@ class PicovoiceWakeWord(
             val keywordPath = AssetExtractor.extract(context, "Hey-Lisa_en_android_v3_0_0.ppn")
 
             porcupineManager = PorcupineManager.Builder()
-                .setAccessKey("z+HWn84qzXoSE9oZrM6GxZvchXs3IlCguuLiqsoedzrBDp94iZSijQ==")
+                .setAccessKey(MY_CONSTANT)
                 .setKeywordPath(keywordPath)
                 .setSensitivity(0.7f)
                 .build(context) {

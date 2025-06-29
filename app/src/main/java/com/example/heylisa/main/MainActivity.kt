@@ -31,6 +31,8 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.ui.graphics.Color
@@ -74,7 +76,7 @@ class MainActivity : ComponentActivity() {
                         onWakeWordDetected = {
 
                             wakeWordListener.stop()
-                            currentSpokenText.value.value = ""
+                            currentSpokenText.value.value = "say something..."
 
                             Handler(Looper.getMainLooper()).postDelayed({
                                 startContinuousSpeechRecognition(this@MainActivity) { partial, final ->
@@ -125,17 +127,28 @@ fun Main( modifier: Modifier = Modifier, currentSpokenText: State<MutableState<S
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(text = currentSpokenText.value.value, style = TextStyle(fontSize = 20.sp))
+                TextField(
+                    value = "",
+                    onValueChange = {},
+                    textStyle = TextStyle(fontSize = 20.sp, color = Color.White),
+                    placeholder = {
+                        Text(currentSpokenText.value.value, color = Color.Black)
+                    },
+                    readOnly = true,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    )
+                )
+
             }
         }
     }
 }
 
-@Composable
-fun floatingButton(){
-    val isListening = remember { mutableStateOf(false) }
-
-}
 
 @Preview(showBackground = true)
 @Composable
