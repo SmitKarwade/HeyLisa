@@ -79,11 +79,12 @@ class MainActivity : ComponentActivity() {
                             currentSpokenText.value.value = "say something..."
 
                             Handler(Looper.getMainLooper()).postDelayed({
-                                startContinuousSpeechRecognition(this@MainActivity) { partial, final ->
+                                startContinuousSpeechRecognition(this@MainActivity,
+                                    restartWakeWord = { wakeWordListener.start() }) { partial, final ->
                                     currentSpokenText.value.value = final ?: partial ?: ""
                                     isListening.value = true
                                 }
-                            }, 500)
+                            }, 1000)
                         }
                     )
                     wakeWordListener.start()

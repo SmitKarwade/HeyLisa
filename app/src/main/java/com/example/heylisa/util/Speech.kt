@@ -13,6 +13,7 @@ private var speechRecognizer: SpeechRecognizer? = null
 
 fun startContinuousSpeechRecognition(
     context: Context,
+    restartWakeWord: () -> Unit,
     onResultUpdate: (partialText: String, finalText: String?) -> Unit
 ) {
     if (speechRecognizer == null)
@@ -50,8 +51,9 @@ fun startContinuousSpeechRecognition(
                 ?.firstOrNull()
 
             onResultUpdate("", finalText ?: "")
-            // Restart listening again
-            speechRecognizer?.startListening(recognizerIntent)
+            speechRecognizer?.cancel()
+            speechRecognizer?.stopListening()
+            restartWakeWord()
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
