@@ -74,21 +74,29 @@ class MainActivity : ComponentActivity() {
                     wakeWordListener = PicovoiceWakeWord(
                         context = this@MainActivity,
                         onWakeWordDetected = {
+                            if (isListening.value) return@PicovoiceWakeWord // already active
 
+                            isListening.value = true
                             wakeWordListener.stop()
-                            currentSpokenText.value.value = "say something..."
+                            currentSpokenText.value.value = "Say something..."
 
                             Handler(Looper.getMainLooper()).postDelayed({
-                                startContinuousSpeechRecognition(this@MainActivity,
-                                    restartWakeWord = { wakeWordListener.start() }) { partial, final ->
-                                    currentSpokenText.value.value = final ?: partial ?: ""
-                                    isListening.value = true
-                                }
+                                startContinuousSpeechRecognition(
+                                    context = this@MainActivity,
+                                    restartWakeWord = {
+                                        isListening.value = false
+                                        wakeWordListener.start()
+                                    },
+                                    onResultUpdate = { partial, final ->
+                                        currentSpokenText.value.value = final ?: partial ?: ""
+                                    }
+                                )
                             }, 1000)
                         }
                     )
                     wakeWordListener.start()
                 }
+
                 Main(currentSpokenText = currentSpokenText, isListening = isListening, onRestartWakeWord = {wakeWordListener.start()})
             }
         }

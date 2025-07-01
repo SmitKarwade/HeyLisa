@@ -3,6 +3,8 @@ package com.example.heylisa.util
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -34,16 +36,22 @@ fun startContinuousSpeechRecognition(
 
         override fun onError(error: Int) {
             Log.d("SpeechRecognizer", "Error: $error")
-            // Restart on most common recoverable errors
-            val recoverableErrors = listOf(
+            when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH,
-                SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-            )
-            if (error in recoverableErrors) {
-                speechRecognizer?.cancel()
-                speechRecognizer?.startListening(recognizerIntent)
+                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                    speechRecognizer?.cancel()
+                    stopContinuousSpeechRecognition()
+                    restartWakeWord()
+                }
+                else -> {
+                    speechRecognizer?.cancel()
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        speechRecognizer?.startListening(recognizerIntent)
+                    }, 500)
+                }
             }
         }
+
 
         override fun onResults(results: Bundle?) {
             val finalText = results
@@ -52,8 +60,9 @@ fun startContinuousSpeechRecognition(
 
             onResultUpdate("", finalText ?: "")
             speechRecognizer?.cancel()
-            speechRecognizer?.stopListening()
-            restartWakeWord()
+            Handler(Looper.getMainLooper()).postDelayed({
+                speechRecognizer?.startListening(recognizerIntent)
+            }, 500)
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
