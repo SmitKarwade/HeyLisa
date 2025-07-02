@@ -1,175 +1,73 @@
 package com.example.heylisa.main
 
+import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.sp
-import com.example.heylisa.ui.theme.HeyLisaTheme
-import com.example.heylisa.util.PicovoiceWakeWord
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
-import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.State
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.heylisa.util.startContinuousSpeechRecognition
-import com.example.heylisa.util.stopContinuousSpeechRecognition
+import com.example.heylisa.util.WakeWordService
+import com.example.heylisa.ui.theme.HeyLisaTheme
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var wakeWordListener: PicovoiceWakeWord
-    private lateinit var requestPermissionLauncher: ActivityResultLauncher<String>
-
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            startWakeWordService()
+        } else {
+            Toast.makeText(this, "Microphone permission is required.", Toast.LENGTH_LONG).show()
+            finish()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        checkAndRequestPermission()
 
-        requestPermissionLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { isGranted: Boolean ->
-            if (!isGranted) {
-                Toast.makeText(this, "Microphone permission is required.", Toast.LENGTH_LONG).show()
-                finish()
-            }
-        }
-
-        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-        }
-
-        enableEdgeToEdge()
         setContent {
             HeyLisaTheme {
-                val spokenText = remember { mutableStateOf("Listening for wake word...") }
-                val currentSpokenText = rememberUpdatedState(spokenText)
-                val isListening = remember { mutableStateOf(false) }
-                LaunchedEffect(Unit) {
-                    wakeWordListener = PicovoiceWakeWord(
-                        context = this@MainActivity,
-                        onWakeWordDetected = {
-                            if (isListening.value) return@PicovoiceWakeWord // already active
-
-                            isListening.value = true
-                            wakeWordListener.stop()
-                            currentSpokenText.value.value = "Say something..."
-
-                            Handler(Looper.getMainLooper()).postDelayed({
-                                startContinuousSpeechRecognition(
-                                    context = this@MainActivity,
-                                    restartWakeWord = {
-                                        isListening.value = false
-                                        wakeWordListener.start()
-                                    },
-                                    onResultUpdate = { partial, final ->
-                                        currentSpokenText.value.value = final ?: partial ?: ""
-                                    }
-                                )
-                            }, 1000)
-                        }
-                    )
-                    wakeWordListener.start()
-                }
-
-                Main(currentSpokenText = currentSpokenText, isListening = isListening, onRestartWakeWord = {wakeWordListener.start()})
+                CenteredMessage("Hey Lisa is listening in the background...")
             }
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        wakeWordListener.stop()
-    }
-}
-
-@Composable
-fun Main( modifier: Modifier = Modifier, currentSpokenText: State<MutableState<String>>, isListening: MutableState<Boolean>, onRestartWakeWord: () -> Unit) {
-
-    Scaffold(modifier = Modifier.fillMaxSize(),
-        floatingActionButton = {
-            if (isListening.value) {
-                FloatingActionButton(
-                    onClick = {
-                        stopContinuousSpeechRecognition()
-                        isListening.value = false
-                        currentSpokenText.value.value = "Listening for wake word..."
-                        onRestartWakeWord()
-                    }
-                ) {
-                    Icon(
-                        painter = painterResource(id = android.R.drawable.ic_media_pause),
-                        contentDescription = "Pause",
-                        tint = Color.White
-                    )
-                }
-            }
-        }) { innerPadding ->
-        Box(modifier = Modifier.padding(innerPadding)){
-            Column(
-                modifier = Modifier.fillMaxSize().padding(16.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                TextField(
-                    value = "",
-                    onValueChange = {},
-                    textStyle = TextStyle(fontSize = 20.sp, color = Color.White),
-                    placeholder = {
-                        Text(currentSpokenText.value.value, color = Color.Black)
-                    },
-                    readOnly = true,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        disabledIndicatorColor = Color.Transparent,
-                    )
-                )
-
-            }
+    private fun checkAndRequestPermission() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startWakeWordService()
+        } else {
+            requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
-}
 
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    HeyLisaTheme {
-
+    private fun startWakeWordService() {
+        val intent = Intent(this, WakeWordService::class.java)
+        Handler(Looper.getMainLooper()).postDelayed({
+            startForegroundService(intent)
+        }, 200)
     }
 }
 
-
-
-
-
-
-
+@Composable
+fun CenteredMessage(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = message, style = MaterialTheme.typography.titleMedium)
+    }
+}
