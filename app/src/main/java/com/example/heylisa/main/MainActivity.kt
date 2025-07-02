@@ -28,7 +28,6 @@ class MainActivity : ComponentActivity() {
             startWakeWordService()
         } else {
             Toast.makeText(this, "Microphone permission is required.", Toast.LENGTH_LONG).show()
-            finish()
         }
     }
 

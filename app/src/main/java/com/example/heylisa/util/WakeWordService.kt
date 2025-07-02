@@ -44,9 +44,16 @@ class WakeWordService : Service() {
             }
         )
 
-        wakeWordListener.start()
-        Log.d("WakeWordService", "Wake word service started.")
+//        wakeWordListener.start()
+//        Log.d("WakeWordService", "Wake word service started.")
     }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        wakeWordListener.start()
+        Log.d("WakeWordService", "Wake word listener restarted")
+        return START_STICKY
+    }
+
 
     override fun onDestroy() {
         super.onDestroy()
