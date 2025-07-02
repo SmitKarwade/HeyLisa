@@ -1,16 +1,13 @@
 package com.example.heylisa.util
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
+import android.app.*
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
-import com.example.heylisa.util.PicovoiceWakeWord
+import com.example.heylisa.voice.VoiceInputActivity
 
 class WakeWordService : Service() {
 
@@ -21,8 +18,7 @@ class WakeWordService : Service() {
 
         createNotificationChannel()
 
-        // Build notification for foreground
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("HeyLisa Assistant")
             .setContentText("Listening for 'Hey Lisa'...")
             .setSmallIcon(R.drawable.mic)
@@ -31,29 +27,29 @@ class WakeWordService : Service() {
 
         startForeground(NOTIFICATION_ID, notification)
 
+        // Wake word setup
         wakeWordListener = PicovoiceWakeWord(
             context = this,
             onWakeWordDetected = {
+                Log.d("WakeWordService", "Wake word detected!")
                 wakeWordListener.stop()
-
-                // Start transparent activity for speech recognition
-                val intent = Intent(this, com.example.heylisa.voice.VoiceInputActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                if (AppStateObserver.isAppInForeground) {
+                    val intent = Intent(this, VoiceInputActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    }
+                    startActivity(intent)
+                } else {
+                    showVoiceNotification()
                 }
-                startActivity(intent)
             }
         )
-
-//        wakeWordListener.start()
-//        Log.d("WakeWordService", "Wake word service started.")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         wakeWordListener.start()
-        Log.d("WakeWordService", "Wake word listener restarted")
+        Log.d("WakeWordService", "Wake word listener started")
         return START_STICKY
     }
-
 
     override fun onDestroy() {
         super.onDestroy()
@@ -67,15 +63,53 @@ class WakeWordService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "HeyLisa Wake Word",
-                NotificationManager.IMPORTANCE_LOW
-            )
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Wake word and speech input notifications"
+                enableLights(true)
+                enableVibration(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
     }
 
+
+    private fun showVoiceNotification() {
+        val intent = Intent(this, VoiceInputActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("👋 Hey Lisa Detected")
+            .setContentText("Tap to speak your command")
+            .setSmallIcon(R.drawable.mic)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setFullScreenIntent(pendingIntent, true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setDefaults(Notification.DEFAULT_ALL)
+            .build()
+
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(VOICE_NOTIFICATION_ID, notification)
+    }
+
+
+
     companion object {
         private const val CHANNEL_ID = "hey_lisa_wake_word_channel"
         private const val NOTIFICATION_ID = 101
+        private const val VOICE_NOTIFICATION_ID = 102
     }
 }
