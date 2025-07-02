@@ -2,6 +2,8 @@ package com.example.heylisa.util
 
 import android.app.*
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -27,7 +29,6 @@ class WakeWordService : Service() {
 
         startForeground(NOTIFICATION_ID, notification)
 
-        // Wake word setup
         wakeWordListener = PicovoiceWakeWord(
             context = this,
             onWakeWordDetected = {
@@ -60,6 +61,8 @@ class WakeWordService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "HeyLisa Wake Word",
@@ -68,8 +71,12 @@ class WakeWordService : Service() {
                 description = "Wake word and speech input notifications"
                 enableLights(true)
                 enableVibration(true)
+                setSound(soundUri, AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .build())
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
+
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
@@ -99,6 +106,7 @@ class WakeWordService : Service() {
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setDefaults(Notification.DEFAULT_ALL)
+            .addAction(R.drawable.mic, "Listen Now", pendingIntent)
             .build()
 
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
