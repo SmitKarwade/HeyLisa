@@ -43,7 +43,6 @@ class VoiceInputActivity : ComponentActivity() {
                         text = it
                     },
                     onError = {
-                        text = "Error occurred"
                         restartWakeWordServiceAndFinish()
                     }
                 )

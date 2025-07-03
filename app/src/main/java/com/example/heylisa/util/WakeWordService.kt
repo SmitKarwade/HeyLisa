@@ -32,7 +32,6 @@ class WakeWordService : Service() {
         wakeWordListener = PicovoiceWakeWord(
             context = this,
             onWakeWordDetected = {
-                Log.d("WakeWordService", "Wake word detected!")
                 wakeWordListener.stop()
                 if (AppStateObserver.isAppInForeground) {
                     val intent = Intent(this, VoiceInputActivity::class.java).apply {
@@ -48,6 +47,9 @@ class WakeWordService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
+
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancelAll()
         stopSelf()
     }
 
@@ -64,7 +66,7 @@ class WakeWordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
-        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+//        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -111,7 +113,7 @@ class WakeWordService : Service() {
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("👋 Hey Lisa Detected")
+            .setContentTitle("Hey Lisa Detected")
             .setContentText("Tap to speak your command")
             .setSmallIcon(R.drawable.mic)
             .setContentIntent(pendingIntent)
