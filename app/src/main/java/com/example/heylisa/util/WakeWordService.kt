@@ -20,7 +20,7 @@ class WakeWordService : Service() {
 
         createNotificationChannel()
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, SILENT_CHANNEL_ID)
             .setContentTitle("HeyLisa Assistant")
             .setContentText("Listening for 'Hey Lisa'...")
             .setSmallIcon(R.drawable.mic)
@@ -46,9 +46,13 @@ class WakeWordService : Service() {
         )
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         wakeWordListener.start()
-        Log.d("WakeWordService", "Wake word listener started")
         return START_STICKY
     }
 
@@ -60,26 +64,37 @@ class WakeWordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
 
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "HeyLisa Wake Word",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Wake word and speech input notifications"
-                enableLights(true)
-                enableVibration(true)
-                setSound(soundUri, AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                    .build())
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-            }
-
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "HeyLisa Wake Word",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Wake word and speech input notifications"
+            enableLights(true)
+            enableVibration(false)
+//            setSound(soundUri, AudioAttributes.Builder()
+//                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+//                .build())
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
+
+        val silentChannel = NotificationChannel(
+            SILENT_CHANNEL_ID,
+            "HeyLisa running in background...",
+            NotificationManager.IMPORTANCE_MIN
+        ).apply {
+            description = "Silent background notifications"
+            setSound(null, null)
+            enableVibration(false)
+            enableLights(false)
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        }
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
+        manager.createNotificationChannel(silentChannel)
     }
 
 
@@ -116,7 +131,8 @@ class WakeWordService : Service() {
 
 
     companion object {
-        private const val CHANNEL_ID = "hey_lisa_wake_word_channel"
+        private const val CHANNEL_ID = "hey_lisa_voice_channel"
+        private const val SILENT_CHANNEL_ID = "hey_lisa_silent_channel"
         private const val NOTIFICATION_ID = 101
         private const val VOICE_NOTIFICATION_ID = 102
     }
