@@ -12,20 +12,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.heylisa.util.WakeWordService
 import java.util.*
 
 class VoiceInputActivity : ComponentActivity() {
 
     private lateinit var speechRecognizer: SpeechRecognizer
+    private var isListening = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,19 +51,16 @@ class VoiceInputActivity : ComponentActivity() {
                     .background(Color(0xAA000000)),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        painter = painterResource(id = android.R.drawable.ic_btn_speak_now),
-                        contentDescription = "Mic",
-                        tint = Color.White,
-                        modifier = Modifier.size(64.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(text = text, fontSize = 20.sp, color = Color.White)
-                }
+                HeyLisaBar(text = text.ifEmpty { "Ask Lisa" },
+                    onMicClick = {
+                        text = ""
+                        isListening = true
+                    }
+                )
             }
         }
     }
+
 
     private fun startSpeechRecognition(
         onResult: (String) -> Unit,
