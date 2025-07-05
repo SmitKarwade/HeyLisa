@@ -7,6 +7,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.heylisa.util.WakeWordService
 import java.util.*
@@ -30,20 +32,22 @@ class VoiceInputActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+
+        val text = mutableStateOf("")
+
         enableEdgeToEdge()
         setContent {
-            var text by remember { mutableStateOf("") }
-
             LaunchedEffect(Unit) {
                 isListening = true
                 startSpeechRecognition(
                     onResult = {
-                        text = it
+                        text.value = it
                         isListening = false
                         //restartWakeWordServiceAndFinish()
                     },
                     onPartial = {
-                        text = it
+                        text.value = it
                     },
                     onError = {
                         isListening = false
@@ -55,7 +59,7 @@ class VoiceInputActivity : ComponentActivity() {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xAA000000))
+                    .background(Color(0x00000000))
                     .clickable {
                         restartWakeWordServiceAndFinish()
                     }
@@ -63,24 +67,25 @@ class VoiceInputActivity : ComponentActivity() {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color(0xAA000000))
+                        .padding(bottom = 30.dp)
+                        .background(Color(0x00000000))
                         .align(Alignment.BottomCenter)
                         .clickable(enabled = false){},
                     contentAlignment = Alignment.Center
                 ) {
-                    HeyLisaBar(text = text.ifEmpty { "Ask Lisa" },
+                    HeyLisaBar(text = text,
                         onMicClick = {
                             if (!isListening) {
-                                text = ""
+                                text.value = ""
                                 isListening = true
                                 startSpeechRecognition(
                                     onResult = {
-                                        text = it
+                                        text.value = it
                                         isListening = false
                                         //restartWakeWordServiceAndFinish()
                                     },
                                     onPartial = {
-                                        text = it
+                                        text.value = it
                                     },
                                     onError = {
                                         isListening = false
@@ -88,6 +93,12 @@ class VoiceInputActivity : ComponentActivity() {
                                     }
                                 )
                             }
+                        },
+                        onSendClick = {
+                            text.value = ""
+                        },
+                        onTextChange = {
+                            text.value = it
                         }
                     )
                 }
@@ -107,7 +118,7 @@ class VoiceInputActivity : ComponentActivity() {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         }
 
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer.setRecognitionListener(null)
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
             override fun onBeginningOfSpeech() {}
