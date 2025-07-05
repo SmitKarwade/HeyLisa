@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.core.view.WindowInsetsControllerCompat
 import com.example.heylisa.util.WakeWordService
 import java.util.*
 
@@ -27,6 +28,8 @@ class VoiceInputActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
+
         enableEdgeToEdge()
         setContent {
             var text by remember { mutableStateOf("") }
