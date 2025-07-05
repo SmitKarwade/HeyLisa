@@ -31,16 +31,19 @@ class VoiceInputActivity : ComponentActivity() {
             var text by remember { mutableStateOf("Listening...") }
 
             LaunchedEffect(Unit) {
+                isListening = true
                 startSpeechRecognition(
                     onResult = {
                         text = it
-                        restartWakeWordServiceAndFinish()
+                        isListening = false
+                        //restartWakeWordServiceAndFinish()
                     },
                     onPartial = {
                         text = it
                     },
                     onError = {
-                        restartWakeWordServiceAndFinish()
+                        isListening = false
+                        //restartWakeWordServiceAndFinish()
                     }
                 )
             }
@@ -53,8 +56,24 @@ class VoiceInputActivity : ComponentActivity() {
             ) {
                 HeyLisaBar(text = text.ifEmpty { "Ask Lisa" },
                     onMicClick = {
-                        text = ""
-                        isListening = true
+                        if (!isListening) {
+                            text = ""
+                            isListening = true
+                            startSpeechRecognition(
+                                onResult = {
+                                    text = it
+                                    isListening = false
+                                    //restartWakeWordServiceAndFinish()
+                                },
+                                onPartial = {
+                                    text = it
+                                },
+                                onError = {
+                                    isListening = false
+                                    //restartWakeWordServiceAndFinish()
+                                }
+                            )
+                        }
                     }
                 )
             }
@@ -109,6 +128,9 @@ class VoiceInputActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        speechRecognizer.destroy()
+        if (::speechRecognizer.isInitialized) {
+            speechRecognizer.destroy()
+        }
+        restartWakeWordServiceAndFinish()
     }
 }
