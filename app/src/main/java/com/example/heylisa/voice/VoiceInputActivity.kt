@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,7 +29,7 @@ class VoiceInputActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            var text by remember { mutableStateOf("Listening...") }
+            var text by remember { mutableStateOf("") }
 
             LaunchedEffect(Unit) {
                 isListening = true
@@ -51,31 +52,42 @@ class VoiceInputActivity : ComponentActivity() {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xAA000000)),
-                contentAlignment = Alignment.Center
-            ) {
-                HeyLisaBar(text = text.ifEmpty { "Ask Lisa" },
-                    onMicClick = {
-                        if (!isListening) {
-                            text = ""
-                            isListening = true
-                            startSpeechRecognition(
-                                onResult = {
-                                    text = it
-                                    isListening = false
-                                    //restartWakeWordServiceAndFinish()
-                                },
-                                onPartial = {
-                                    text = it
-                                },
-                                onError = {
-                                    isListening = false
-                                    //restartWakeWordServiceAndFinish()
-                                }
-                            )
-                        }
+                    .background(Color(0xAA000000))
+                    .clickable {
+                        restartWakeWordServiceAndFinish()
                     }
-                )
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xAA000000))
+                        .align(Alignment.BottomCenter)
+                        .clickable(enabled = false){},
+                    contentAlignment = Alignment.Center
+                ) {
+                    HeyLisaBar(text = text.ifEmpty { "Ask Lisa" },
+                        onMicClick = {
+                            if (!isListening) {
+                                text = ""
+                                isListening = true
+                                startSpeechRecognition(
+                                    onResult = {
+                                        text = it
+                                        isListening = false
+                                        //restartWakeWordServiceAndFinish()
+                                    },
+                                    onPartial = {
+                                        text = it
+                                    },
+                                    onError = {
+                                        isListening = false
+                                        //restartWakeWordServiceAndFinish()
+                                    }
+                                )
+                            }
+                        }
+                    )
+                }
             }
         }
     }
