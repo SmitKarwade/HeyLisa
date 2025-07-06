@@ -1,10 +1,7 @@
 package com.example.heylisa.util
 
 import android.app.*
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.*
 import android.os.Build
@@ -25,23 +22,13 @@ class VoskWakeWordService : Service() {
     private var model: Model? = null
     private var isListening = false
 
-    private val restartReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "com.example.heylisa.RESTART_WAKEWORD") {
-                Log.d("VoskWake", "Restarting wake word detection...")
-                loadModel()
-            }
-        }
-    }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        val filter = IntentFilter("com.example.heylisa.RESTART_WAKEWORD")
-        registerReceiver(restartReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
 
-        startForeground(101, buildForegroundNotification())
+        startForeground(NOTIFICATION_ID, buildForegroundNotification())
         loadModel()
         Log.d("VoskWake", "Service created")
     }
@@ -106,27 +93,40 @@ class VoskWakeWordService : Service() {
         isListening = false
         Log.d("VoskWake", "Triggering Voice Input...")
 
-        stopSelf()
+        Handler(Looper.getMainLooper()).postDelayed({
+            stopSelf()
+        }, 3000)
 
-        val intent = Intent(this, VoiceInputActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
 
-        Handler(Looper.getMainLooper()).post {
+        if (AppStateObserver.isAppInForeground) {
+            val intent = Intent(this, VoiceInputActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
             startActivity(intent)
+        } else {
+            showVoiceNotification()
         }
     }
+
 
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancelAll()
+        stopSelf()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        Log.d("service", "destroyed")
         isListening = false
         model?.close()
-        unregisterReceiver(restartReceiver)
     }
 
 
@@ -142,12 +142,72 @@ class VoskWakeWordService : Service() {
     }
 
     private fun createNotificationChannel() {
+
         val channel = NotificationChannel(
-            "vosk_channel",
-            "Vosk Wake Word",
-            NotificationManager.IMPORTANCE_LOW
-        )
+            CHANNEL_ID,
+            "HeyLisa Wake Word",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Wake word and speech input notifications"
+            enableLights(true)
+            enableVibration(false)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+
+        val silentChannel = NotificationChannel(
+            SILENT_CHANNEL_ID,
+            "HeyLisa running in background...",
+            NotificationManager.IMPORTANCE_MIN
+        ).apply {
+            description = "Silent background notifications"
+            setSound(null, null)
+            enableVibration(false)
+            enableLights(false)
+            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        }
+
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
+        manager.createNotificationChannel(silentChannel)
+    }
+
+
+    private fun showVoiceNotification() {
+        val intent = Intent(this, VoiceInputActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Hey Lisa Detected")
+            .setContentText("Tap to speak your command")
+            .setSmallIcon(R.drawable.mic)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setFullScreenIntent(pendingIntent, true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setDefaults(Notification.DEFAULT_ALL)
+            .addAction(R.drawable.mic, "Listen Now", pendingIntent)
+            .build()
+
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(VOICE_NOTIFICATION_ID, notification)
+    }
+
+
+
+    companion object {
+        private const val CHANNEL_ID = "hey_lisa_voice_channel"
+        private const val SILENT_CHANNEL_ID = "hey_lisa_silent_channel"
+        private const val NOTIFICATION_ID = 101
+        private const val VOICE_NOTIFICATION_ID = 102
     }
 }
