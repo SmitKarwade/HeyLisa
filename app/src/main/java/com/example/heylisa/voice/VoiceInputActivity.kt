@@ -68,7 +68,7 @@ class VoiceInputActivity : ComponentActivity() {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 30.dp)
+                        .padding(bottom = 50.dp)
                         .background(Color(0x00000000))
                         .align(Alignment.BottomCenter)
                         .clickable(enabled = false){},
