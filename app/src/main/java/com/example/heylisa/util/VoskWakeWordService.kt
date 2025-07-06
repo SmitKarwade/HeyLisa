@@ -16,12 +16,10 @@ import com.example.heylisa.voice.VoiceInputActivity
 import org.vosk.Model
 import org.vosk.Recognizer
 
-
 class VoskWakeWordService : Service() {
 
     private var model: Model? = null
     private var isListening = false
-
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate() {
@@ -49,7 +47,15 @@ class VoskWakeWordService : Service() {
                     return@Thread
                 }
 
-                model = Model(AssetExtractor.extract(this, "vosk-model-small-en-us-0.15"))
+                val modelPath = AssetExtractor.extract(this, "model")
+                Log.d("VoskWake", "Model path: $modelPath")
+                try {
+                    model = Model(modelPath.absolutePath)                } catch (e: Exception) {
+                    Log.e("VoskWake", "Model load failed: ${e.message}")
+                    stopSelf()
+                    return@Thread
+                }
+
                 val recognizer = Recognizer(model, sampleRate.toFloat())
 
                 val audioRecord = AudioRecord(
@@ -97,7 +103,6 @@ class VoskWakeWordService : Service() {
             stopSelf()
         }, 3000)
 
-
         if (AppStateObserver.isAppInForeground) {
             val intent = Intent(this, VoiceInputActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -107,8 +112,6 @@ class VoskWakeWordService : Service() {
             showVoiceNotification()
         }
     }
-
-
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY
@@ -129,11 +132,10 @@ class VoskWakeWordService : Service() {
         model?.close()
     }
 
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun buildForegroundNotification(): Notification {
-        return NotificationCompat.Builder(this, "vosk_channel")
+        return NotificationCompat.Builder(this, SILENT_CHANNEL_ID)
             .setContentTitle("HeyLisa Vosk")
             .setContentText("Listening for 'Hey Lisa'...")
             .setSmallIcon(R.drawable.mic)
@@ -142,35 +144,35 @@ class VoskWakeWordService : Service() {
     }
 
     private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "HeyLisa Wake Word",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Wake word and speech input notifications"
+                enableLights(true)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
 
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "HeyLisa Wake Word",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Wake word and speech input notifications"
-            enableLights(true)
-            enableVibration(false)
-            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            val silentChannel = NotificationChannel(
+                SILENT_CHANNEL_ID,
+                "HeyLisa running in background...",
+                NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                description = "Silent background notifications"
+                setSound(null, null)
+                enableVibration(false)
+                enableLights(false)
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            }
+
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(silentChannel)
         }
-
-        val silentChannel = NotificationChannel(
-            SILENT_CHANNEL_ID,
-            "HeyLisa running in background...",
-            NotificationManager.IMPORTANCE_MIN
-        ).apply {
-            description = "Silent background notifications"
-            setSound(null, null)
-            enableVibration(false)
-            enableLights(false)
-            lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-        }
-
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
-        manager.createNotificationChannel(silentChannel)
     }
-
 
     private fun showVoiceNotification() {
         val intent = Intent(this, VoiceInputActivity::class.java).apply {
@@ -202,12 +204,10 @@ class VoskWakeWordService : Service() {
         manager.notify(VOICE_NOTIFICATION_ID, notification)
     }
 
-
-
     companion object {
-        private const val CHANNEL_ID = "hey_lisa_voice_channel"
-        private const val SILENT_CHANNEL_ID = "hey_lisa_silent_channel"
-        private const val NOTIFICATION_ID = 101
-        private const val VOICE_NOTIFICATION_ID = 102
+        private const val CHANNEL_ID = "main_voice_channel"
+        private const val SILENT_CHANNEL_ID = "secondary_silent_channel"
+        private const val NOTIFICATION_ID = 201
+        private const val VOICE_NOTIFICATION_ID = 202
     }
 }
