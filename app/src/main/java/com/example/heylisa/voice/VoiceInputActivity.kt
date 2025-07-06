@@ -7,6 +7,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
-import com.example.heylisa.util.WakeWordService
 import java.util.*
 
 class VoiceInputActivity : ComponentActivity() {
@@ -61,7 +61,7 @@ class VoiceInputActivity : ComponentActivity() {
                     .background(Color(0x00000000))
                     .clickable {
                         speechRecognizer.destroy()
-                        restartWakeWordServiceAndFinish()
+                        restartWakeWordService()
                         finish()
                     }
             ) {
@@ -145,12 +145,12 @@ class VoiceInputActivity : ComponentActivity() {
         speechRecognizer.startListening(intent)
     }
 
-    private fun restartWakeWordServiceAndFinish() {
-        Handler(Looper.getMainLooper()).postDelayed({
-            val serviceIntent = Intent(this, WakeWordService::class.java)
-            startForegroundService(serviceIntent)
-        }, 1500)
+    private fun restartWakeWordService() {
+        val serviceIntent = Intent(this, com.example.heylisa.util.VoskWakeWordService::class.java)
+        Log.d("VoiceInput", "Requesting VoskWakeWordService restart")
+        startService(serviceIntent)
     }
+
 
     override fun onDestroy() {
         super.onDestroy()
