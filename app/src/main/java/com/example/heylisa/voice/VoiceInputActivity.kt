@@ -61,7 +61,9 @@ class VoiceInputActivity : ComponentActivity() {
                     .fillMaxSize()
                     .background(Color(0x00000000))
                     .clickable {
+                        speechRecognizer.destroy()
                         restartWakeWordServiceAndFinish()
+                        finish()
                     }
             ) {
                 Box(
@@ -148,15 +150,13 @@ class VoiceInputActivity : ComponentActivity() {
         Handler(Looper.getMainLooper()).postDelayed({
             val serviceIntent = Intent(this, WakeWordService::class.java)
             startForegroundService(serviceIntent)
-            finish()
         }, 1500)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         if (::speechRecognizer.isInitialized) {
-            speechRecognizer.destroy()
+            speechRecognizer.cancel()
         }
-        restartWakeWordServiceAndFinish()
     }
 }

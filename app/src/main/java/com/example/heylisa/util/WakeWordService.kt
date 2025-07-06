@@ -14,6 +14,8 @@ import com.example.heylisa.voice.VoiceInputActivity
 class WakeWordService : Service() {
 
     private lateinit var wakeWordListener: PicovoiceWakeWord
+    private var isDeleted = false
+    private var isListening = false
 
     override fun onCreate() {
         super.onCreate()
@@ -37,6 +39,7 @@ class WakeWordService : Service() {
                     val intent = Intent(this, VoiceInputActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                     }
+                    Log.d("WakeWordService", "Starting VoiceInputActivity")
                     startActivity(intent)
                 } else {
                     showVoiceNotification()
@@ -54,9 +57,14 @@ class WakeWordService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        wakeWordListener.start()
+        try {
+            wakeWordListener.start()
+        } catch (e: Exception) {
+            Log.e("WakeWordService", "Failed to start listener: ${e.message}")
+        }
         return START_STICKY
     }
+
 
     override fun onDestroy() {
         super.onDestroy()
