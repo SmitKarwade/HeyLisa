@@ -11,12 +11,6 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.heylisa.util.WakeWordService
 import com.example.heylisa.ui.theme.HeyLisaTheme
@@ -43,13 +37,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
+        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
         checkAndRequestPermission()
 
         setContent {
             HeyLisaTheme {
-                CenteredMessage("Hey Lisa is listening in the background...")
+                TransparentScaffoldWithToolbar()
             }
         }
     }
@@ -73,17 +67,5 @@ class MainActivity : ComponentActivity() {
         Handler(Looper.getMainLooper()).postDelayed({
             startForegroundService(intent)
         }, 200)
-    }
-}
-
-@Composable
-fun CenteredMessage(message: String) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text = message, style = MaterialTheme.typography.titleMedium)
     }
 }
