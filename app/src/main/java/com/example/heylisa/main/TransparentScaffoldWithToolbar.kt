@@ -1,102 +1,125 @@
 package com.example.heylisa.main
 
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.*
+import androidx.compose.ui.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import com.example.heylisa.R
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TransparentScaffoldWithToolbar() {
-    // Set your drawable image as the background
+fun TransparentScaffoldWithToolbar(context: Context) {
+
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
     val gradient = Brush.verticalGradient(
         colors = listOf(Color(0xFF4F60B6), Color(0xFF6A78C2), Color(0xFFEAE8F3)),
     )
-    
+
     val cstFont = FontFamily(
         Font(R.font.poppins_regular)
     )
+    val statusBarPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(gradient)
-    ) {
-//        Image(
-//            painter = painterResource(id = R.drawable.voice_grad),
-//            contentDescription = null,
-//            contentScale = ContentScale.Crop,
-//            modifier = Modifier.fillMaxSize().alpha(0.8f)
-//        )
-
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text(text = "") }, // Empty title
-                    navigationIcon = {
-                        IconButton(onClick = { /* Left Action */ }) {
-                            Icon(
-                                painter = painterResource(R.drawable.vector_ellipsis),
-                                contentDescription = "Favorite",
-                                tint = Color.White
-                            )
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { /* Action 2 */ }) {
-                            Icon(
-                                painter = painterResource(R.drawable.common_user),
-                                contentDescription = "Settings",
-                                tint = Color.White
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Transparent,
-                        titleContentColor = Color.White
-                    )
-                )
-            },
-            containerColor = Color.Transparent,
-            contentColor = Color.White,
-            content = { innerPadding ->
-                Box(
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.width(280.dp),
+                drawerContainerColor = Color.White,
+                drawerContentColor = Color.Black,
+            ) {
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(innerPadding),
-                    contentAlignment = Alignment.Center
+                        .padding(top = statusBarPadding, bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
                 ) {
                     Text(
-                        text = "Say,\nhey lisa!",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontFamily = cstFont,
-                        color = Color.White
+                        text = "Recents",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                    HorizontalDivider(
+                        Modifier,
+                        DividerDefaults.Thickness,
+                        color = Color.Black.copy(alpha = 0.3f)
+                    )
+                    Text(
+                        text = "Not available for now",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                        color = Color.Black.copy(alpha = 0.7f)
                     )
                 }
             }
-        )
+
+        }
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(gradient)
+        ) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text(text = "") },
+                        navigationIcon = {
+                            IconButton(onClick = {
+                                scope.launch { drawerState.open() }
+                            }) {
+                                Icon(
+                                    painter = painterResource(R.drawable.vector_ellipsis),
+                                    contentDescription = "Open Drawer",
+                                    tint = Color.White
+                                )
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { Toast.makeText(context, "Profile", Toast.LENGTH_SHORT).show()}) {
+                                Icon(
+                                    painter = painterResource(R.drawable.common_user),
+                                    contentDescription = "User",
+                                    tint = Color.White
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = Color.Transparent,
+                            titleContentColor = Color.White
+                        )
+                    )
+                },
+                containerColor = Color.Transparent,
+                contentColor = Color.White,
+                content = { innerPadding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Say,\nhey lisa!",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontFamily = cstFont,
+                            color = Color.White
+                        )
+                    }
+                }
+            )
+        }
     }
 }
