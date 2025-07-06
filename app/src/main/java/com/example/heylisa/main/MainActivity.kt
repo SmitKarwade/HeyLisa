@@ -12,8 +12,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowInsetsControllerCompat
-import com.example.heylisa.util.WakeWordService
 import com.example.heylisa.ui.theme.HeyLisaTheme
+import com.example.heylisa.util.VoskWakeWordService
 
 class MainActivity : ComponentActivity() {
 
@@ -63,7 +63,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startWakeWordService() {
-        val intent = Intent(this, WakeWordService::class.java)
+        val intent = Intent(this, VoskWakeWordService::class.java)
         Handler(Looper.getMainLooper()).postDelayed({
             startForegroundService(intent)
         }, 200)
