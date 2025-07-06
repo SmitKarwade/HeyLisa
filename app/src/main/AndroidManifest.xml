@@ -39,7 +39,7 @@
             android:excludeFromRecents="true" />
 
         <service
-            android:name=".util.WakeWordService"
+            android:name=".util.VoskWakeWordService"
             android:exported="true"
             android:foregroundServiceType="microphone" />
     </application>
