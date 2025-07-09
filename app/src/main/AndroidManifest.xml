@@ -54,7 +54,7 @@
             android:name=".util.VoskWakeWordService"
             android:exported="false"
             android:foregroundServiceType="microphone"
-            android:process=":recognition_process" />
+            android:enabled="true" />
 
         <service
             android:name=".custom.LisaVoiceInteractionService"
