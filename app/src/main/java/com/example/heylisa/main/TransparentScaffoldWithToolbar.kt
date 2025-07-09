@@ -1,20 +1,25 @@
 package com.example.heylisa.main
 
 import android.content.Context
+import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.heylisa.R
+import com.example.heylisa.util.VoskWakeWordService
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,3 +128,83 @@ fun TransparentScaffoldWithToolbar(context: Context) {
         }
     }
 }
+
+@Composable
+fun ModelDownloadDialog(show: Boolean, progress: Float, isUnzipping: Boolean) {
+    if (show) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = {
+                Text(if (isUnzipping) "Unzipping Model" else "Downloading Model")
+            },
+            text = {
+                Column {
+                    Text(if (isUnzipping) "Extracting files..." else "Downloading required files...")
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                    progress = { progress },
+                        color = ProgressIndicatorDefaults.linearColor,
+                    trackColor = ProgressIndicatorDefaults.linearTrackColor,
+                    strokeCap = ProgressIndicatorDefaults.LinearStrokeCap,
+                    )
+                    Text("${(progress * 100).toInt()}%")
+                }
+            },
+            confirmButton = {}
+        )
+    }
+}
+
+@Composable
+fun startStopService(context: Context){
+    val isRunning = remember { mutableStateOf(false) }
+
+    Column {
+        Button(onClick = {
+            val intent = Intent(context, VoskWakeWordService::class.java)
+            ContextCompat.startForegroundService(context, intent)
+            isRunning.value = true
+        }) {
+            Text("Start Wake Word Detection")
+        }
+
+        if (isRunning.value) {
+            Button(onClick = {
+                context.stopService(Intent(context, VoskWakeWordService::class.java))
+                isRunning.value = false
+            }) {
+                Text("Stop Service")
+            }
+        }
+    }
+}
+
+@Composable
+fun WakeWordServiceControl(modifier: Modifier = Modifier, context: Context) {
+    val isRunning = remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Button(onClick = {
+            val intent = Intent(context, VoskWakeWordService::class.java)
+            ContextCompat.startForegroundService(context, intent)
+            isRunning.value = true
+        }) {
+            Text("Start Wake Word Detection")
+        }
+
+        if (isRunning.value) {
+            Button(onClick = {
+                context.stopService(Intent(context, VoskWakeWordService::class.java))
+                isRunning.value = false
+            }) {
+                Text("Stop Service")
+            }
+        }
+    }
+}
+
+

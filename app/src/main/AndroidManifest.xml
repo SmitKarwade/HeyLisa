@@ -7,10 +7,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
     <application
         android:name=".application.MyApp"
         android:allowBackup="true"
+        android:requestLegacyExternalStorage="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -38,10 +42,33 @@
             android:taskAffinity=""
             android:excludeFromRecents="true" />
 
+        <activity
+            android:name=".custom.SettingsActivity"
+            android:exported="true"
+            android:label="Hey Lisa Settings"
+            android:theme="@style/Theme.HeyLisa">
+        </activity>
+
+
         <service
             android:name=".util.VoskWakeWordService"
-            android:exported="true"
-            android:foregroundServiceType="microphone" />
+            android:exported="false"
+            android:foregroundServiceType="microphone"
+            android:process=":recognition_process" />
+
+        <service
+            android:name=".custom.LisaVoiceInteractionService"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/voice_interaction_service" />
+        </service>
+
     </application>
 
 </manifest>

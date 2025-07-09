@@ -1,39 +1,182 @@
 package com.example.heylisa.util
 
+import android.Manifest
 import android.app.*
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.*
-import android.os.Build
-import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
+import android.os.*
 import android.util.Log
-import androidx.annotation.RequiresApi
+import android.widget.Toast
+import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
-import com.example.heylisa.voice.VoiceInputActivity
+import kotlinx.coroutines.*
 import org.vosk.Model
 import org.vosk.Recognizer
+import java.io.File
+import java.io.IOException
 
 class VoskWakeWordService : Service() {
 
-    private var model: Model? = null
+    private lateinit var model: Model
+    private var recognizer: Recognizer? = null
+    private var audioRecord: AudioRecord? = null
     private var isListening = false
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private val serviceJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
+
+    private var wakeWordJob: Job? = null
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        Log.d("HeyLisa", "Channel created")
+        startForeground(1, createNotification("Listening for 'Hey Lisa'..."))
+        Log.d("HeyLisa", "Now service is started")
 
-        startForeground(NOTIFICATION_ID, buildForegroundNotification())
-        loadModel()
-        Log.d("VoskWake", "Service created")
+        serviceScope.launch {
+            Log.d("HeyLisa", "Entered serviceScope.launch")
+
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                Log.e("HeyLisa", "Microphone permission not granted")
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return@launch
+            }
+
+            try {
+                Log.d("HeyLisa", "Before initModel()")
+                initModel()
+                Log.d("HeyLisa", "After initModel()")
+
+                startWakeWordDetection()
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "Initialization failed", e)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
     }
 
-    private fun loadModel() {
-        Thread {
+    private suspend fun initModel() {
+        Log.d("HeyLisa", "Model Initialization started1")
+        val modelDir = File(filesDir, "vosk-model")
+        Log.d("HeyLisa", "Model Initialization started2")
+
+        if (!modelDir.exists()) {
+            Log.e("HeyLisa", "Model directory not found!")
+            throw IOException("Model directory not found")
+        }
+
+        try {
+            withContext(Dispatchers.Default) {
+                withTimeout(30_000) { // Up to 30 seconds if model is large
+                    Log.d("HeyLisa", "Loading model from path: ${modelDir.absolutePath}")
+                    val rnnlmDir = File(modelDir, "rnnlm")
+                    if (rnnlmDir.exists()) {
+                        Log.w("HeyLisa", "Removing rnnlm model to avoid crash...")
+                        rnnlmDir.deleteRecursively()
+                    }
+                    model = Model(modelDir.absolutePath)
+                    Log.d("HeyLisa", "✅ Model loaded successfully")
+                }
+            }
+
+            Log.d("HeyLisa", "⚙️ Creating Recognizer...")
+
             try {
+                recognizer = Recognizer(model, 16000.0f)
+                Log.d("HeyLisa", "✅ Recognizer initialized")
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "❌ Recognizer init failed", e)
+            }
+            Log.d("HeyLisa", "✅ Recognizer initialized")
+
+        } catch (e: TimeoutCancellationException) {
+            Log.e("HeyLisa", "❌ Model loading timed out", e)
+            throw e
+        } catch (e: Exception) {
+            Log.e("HeyLisa", "❌ Model or recognizer init failed", e)
+            throw e
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startWakeWordDetection() {
+        if (isListening) return
+
+        val sampleRate = 16000
+        val bufferSize = AudioRecord.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            bufferSize
+        )
+
+        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e("HeyLisa", "AudioRecord initialization failed")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+
+        val buffer = ByteArray(bufferSize)
+        audioRecord?.startRecording()
+        isListening = true
+
+        wakeWordJob?.cancel()
+        wakeWordJob = CoroutineScope(Dispatchers.Default).launch {
+            val startTime = System.currentTimeMillis()
+            val timeout = 60_000L // 1 min
+
+            while (isListening && System.currentTimeMillis() - startTime < timeout) {
+                try {
+                    val read = audioRecord!!.read(buffer, 0, buffer.size)
+                    if (read > 0) {
+                        recognizer?.acceptWaveForm(buffer, read)
+                        val partial = recognizer?.partialResult
+                        if (partial?.contains("hey lisa", ignoreCase = true) == true) {
+                            Log.d("HeyLisa", "✅ Wake word detected!")
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@VoskWakeWordService, "Hey Lisa detected", Toast.LENGTH_SHORT).show()
+                            }
+                            isListening = false
+                            wakeWordJob?.cancel()
+                            startSpeechRecognition()
+                            return@launch
+                        }
+                    }
+                    delay(10)
+                } catch (e: Exception) {
+                    Log.e("HeyLisa", "Wake word loop error", e)
+                    stopListening()
+                    break
+                }
+            }
+
+            Log.d("HeyLisa", "Wake word timeout or stopped")
+            stopListening()
+        }
+    }
+
+    private fun startSpeechRecognition() {
+        serviceScope.launch {
+            try {
+                recognizer?.close()
+                delay(100)
+                recognizer = Recognizer(model, 16000.0f)
+
                 val sampleRate = 16000
                 val bufferSize = AudioRecord.getMinBufferSize(
                     sampleRate,
@@ -41,24 +184,13 @@ class VoskWakeWordService : Service() {
                     AudioFormat.ENCODING_PCM_16BIT
                 )
 
-                if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                    Log.e("VoskWake", "RECORD_AUDIO permission not granted.")
+                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    Log.e("HeyLisa", "Microphone permission not granted during recognition")
                     stopSelf()
-                    return@Thread
+                    return@launch
                 }
 
-                val modelPath = AssetExtractor.extract(this, "model")
-                Log.d("VoskWake", "Model path: $modelPath")
-                try {
-                    model = Model(modelPath.absolutePath)                } catch (e: Exception) {
-                    Log.e("VoskWake", "Model load failed: ${e.message}")
-                    stopSelf()
-                    return@Thread
-                }
-
-                val recognizer = Recognizer(model, sampleRate.toFloat())
-
-                val audioRecord = AudioRecord(
+                val record = AudioRecord(
                     MediaRecorder.AudioSource.MIC,
                     sampleRate,
                     AudioFormat.CHANNEL_IN_MONO,
@@ -66,148 +198,89 @@ class VoskWakeWordService : Service() {
                     bufferSize
                 )
 
-                val buffer = ByteArray(bufferSize)
-                audioRecord.startRecording()
-                isListening = true
+                if (record.state != AudioRecord.STATE_INITIALIZED) {
+                    Log.e("HeyLisa", "Speech recognition mic init failed")
+                    stopSelf()
+                    return@launch
+                }
 
-                while (isListening) {
-                    val read = audioRecord.read(buffer, 0, buffer.size)
+                val buffer = ByteArray(bufferSize)
+                record.startRecording()
+
+                val speechBuilder = StringBuilder()
+                val timeoutMs = 8000L
+                val startTime = System.currentTimeMillis()
+
+                while (System.currentTimeMillis() - startTime < timeoutMs) {
+                    val read = record.read(buffer, 0, buffer.size)
                     if (read > 0) {
-                        if (recognizer.acceptWaveForm(buffer, read)) {
-                            val result = recognizer.result
-                        } else {
-                            val partial = recognizer.partialResult
-                            if (partial.contains("hey lisa", ignoreCase = true)) {
-                                triggerVoiceInput()
-                                break
-                            }
+                        recognizer?.acceptWaveForm(buffer, read)
+                        val result = recognizer?.result
+                        val text = Regex("\"text\" ?: ?\"(.*?)\"").find(result ?: "")?.groupValues?.getOrNull(1)
+                        if (!text.isNullOrBlank()) {
+                            speechBuilder.append(text).append(" ")
                         }
                     }
                 }
 
-                audioRecord.stop()
-                audioRecord.release()
+                record.stop()
+                record.release()
+
+                val finalSpeech = speechBuilder.toString().trim()
+                Log.d("HeyLisa", "Recognized: $finalSpeech")
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(applicationContext, "You said: $finalSpeech", Toast.LENGTH_LONG).show()
+                }
+
+                // Send result to app (optional)
+                val resultIntent = Intent("com.example.heylisa.RECOGNIZED_TEXT")
+                resultIntent.putExtra("result", finalSpeech)
+                sendBroadcast(resultIntent)
 
             } catch (e: Exception) {
-                Log.e("VoskWakeWordService", "Error: ${e.message}")
-                stopSelf()
+                Log.e("HeyLisa", "Speech recognition error", e)
+            } finally {
+                recognizer?.close()
+                recognizer = Recognizer(model, 16000.0f)
+                startWakeWordDetection()
             }
-        }.start()
-    }
-
-    private fun triggerVoiceInput() {
-        isListening = false
-        Log.d("VoskWake", "Triggering Voice Input...")
-
-        Handler(Looper.getMainLooper()).postDelayed({
-            stopSelf()
-        }, 3000)
-
-        if (AppStateObserver.isAppInForeground) {
-            val intent = Intent(this, VoiceInputActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            startActivity(intent)
-        } else {
-            showVoiceNotification()
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_STICKY
-    }
-
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        super.onTaskRemoved(rootIntent)
-
-        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.cancelAll()
-        stopSelf()
+    private fun stopListening() {
+        isListening = false
+        wakeWordJob?.cancel()
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d("service", "destroyed")
-        isListening = false
-        model?.close()
+        stopListening()
+        recognizer?.close()
+        model.close()
+        serviceScope.cancel()
+        stopForeground(true)
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    private fun buildForegroundNotification(): Notification {
-        return NotificationCompat.Builder(this, SILENT_CHANNEL_ID)
-            .setContentTitle("HeyLisa Vosk")
-            .setContentText("Listening for 'Hey Lisa'...")
+    private fun createNotification(content: String): Notification {
+        return NotificationCompat.Builder(this, "vosk_channel")
+            .setContentTitle("Hey Lisa")
+            .setContentText(content)
             .setSmallIcon(R.drawable.mic)
-            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "HeyLisa Wake Word",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Wake word and speech input notifications"
-                enableLights(true)
-                enableVibration(false)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-            }
-
-            val silentChannel = NotificationChannel(
-                SILENT_CHANNEL_ID,
-                "HeyLisa running in background...",
-                NotificationManager.IMPORTANCE_MIN
-            ).apply {
-                description = "Silent background notifications"
-                setSound(null, null)
-                enableVibration(false)
-                enableLights(false)
-                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-            }
-
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
-            manager.createNotificationChannel(silentChannel)
-        }
-    }
-
-    private fun showVoiceNotification() {
-        val intent = Intent(this, VoiceInputActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val channel = NotificationChannel(
+            "vosk_channel",
+            "Vosk Wake Word Channel",
+            NotificationManager.IMPORTANCE_LOW
         )
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Hey Lisa Detected")
-            .setContentText("Tap to speak your command")
-            .setSmallIcon(R.drawable.mic)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setFullScreenIntent(pendingIntent, true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setDefaults(Notification.DEFAULT_ALL)
-            .addAction(R.drawable.mic, "Listen Now", pendingIntent)
-            .build()
-
-        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(VOICE_NOTIFICATION_ID, notification)
-    }
-
-    companion object {
-        private const val CHANNEL_ID = "main_voice_channel"
-        private const val SILENT_CHANNEL_ID = "secondary_silent_channel"
-        private const val NOTIFICATION_ID = 201
-        private const val VOICE_NOTIFICATION_ID = 202
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
     }
 }
