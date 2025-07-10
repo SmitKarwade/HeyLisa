@@ -38,7 +38,7 @@ class VoskWakeWordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onCreate() {
@@ -124,10 +124,18 @@ class VoskWakeWordService : Service() {
                             }
                             stopListening()
                             serviceScope.launch {
-                                val intent = Intent(applicationContext, VoiceInputActivity::class.java).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                val isAssistant = CheckRole.isDefaultAssistant(this@VoskWakeWordService)
+                                Log.d("HeyLisa", "🎙 Is Default Assistant: $isAssistant")
+                                if(CheckRole.isDefaultAssistant(this@VoskWakeWordService)){
+                                    val intent = Intent(this@VoskWakeWordService, VoiceInputActivity::class.java).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                    }
+                                    startActivity(intent)
+                                }else{
+                                    Handler.createAsync(Looper.getMainLooper()).post {
+                                        Toast.makeText(this@VoskWakeWordService, "Assistant role is not set.", Toast.LENGTH_LONG).show()
+                                    }
                                 }
-                                startActivity(intent)
 
                                 delay(200)
                                 startSpeechRecognition()
