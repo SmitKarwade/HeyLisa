@@ -8,6 +8,7 @@ import android.content.*
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.net.Uri
 import android.os.*
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -67,6 +68,7 @@ class MainActivity : ComponentActivity() {
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
         checkAndRequestPermission()
+        requestBatteryOptimizationException()
 
         setContent {
             HeyLisaTheme {
@@ -114,6 +116,24 @@ class MainActivity : ComponentActivity() {
             else -> showConfirmationDialog = true
         }
     }
+    private fun requestBatteryOptimizationException() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val packageName = packageName
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e("HeyLisa", "Failed to request battery optimization exemption", e)
+                }
+            }
+        }
+    }
+
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun modelDownload(context: Context) {

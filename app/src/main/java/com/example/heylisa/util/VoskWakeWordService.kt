@@ -36,6 +36,10 @@ class VoskWakeWordService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        return START_NOT_STICKY
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -119,9 +123,10 @@ class VoskWakeWordService : Service() {
                             }
                             stopListening()
                             serviceScope.launch {
-                                delay(200) // allow mic to release
-                                startSpeechRecognition()
+                                delay(200)
+                                startSpeechRecognition() // now awaited
                             }
+
 
                         }
                     }
