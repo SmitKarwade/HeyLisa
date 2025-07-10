@@ -156,30 +156,6 @@ fun ModelDownloadDialog(show: Boolean, progress: Float, isUnzipping: Boolean) {
 }
 
 @Composable
-fun startStopService(context: Context){
-    val isRunning = remember { mutableStateOf(false) }
-
-    Column {
-        Button(onClick = {
-            val intent = Intent(context, VoskWakeWordService::class.java)
-            ContextCompat.startForegroundService(context, intent)
-            isRunning.value = true
-        }) {
-            Text("Start Wake Word Detection")
-        }
-
-        if (isRunning.value) {
-            Button(onClick = {
-                context.stopService(Intent(context, VoskWakeWordService::class.java))
-                isRunning.value = false
-            }) {
-                Text("Stop Service")
-            }
-        }
-    }
-}
-
-@Composable
 fun WakeWordServiceControl(modifier: Modifier = Modifier, context: Context) {
     val isRunning = remember { mutableStateOf(false) }
 
