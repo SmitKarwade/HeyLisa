@@ -25,9 +25,13 @@ class VoskWakeWordService : Service() {
     private var audioRecord: AudioRecord? = null
     private var isListening = false
 
+
+    @Volatile private var isShuttingDown = false
+
+    private val recognizerLock = Any()
+
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
-
     private var wakeWordJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -40,8 +44,7 @@ class VoskWakeWordService : Service() {
         serviceScope.launch {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 Log.e("HeyLisa", "Microphone permission not granted")
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopSelfSafely()
                 return@launch
             }
 
@@ -50,37 +53,25 @@ class VoskWakeWordService : Service() {
                 startWakeWordDetection()
             } catch (e: Exception) {
                 Log.e("HeyLisa", "Model init failed", e)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopSelfSafely()
             }
         }
-    }
-
-    private suspend fun initModel() {
-        val modelDir = File(filesDir, "vosk-model")
-        if (!modelDir.exists()) throw IOException("Model not found")
-
-        withContext(Dispatchers.IO) {
-            withTimeout(60_000) {
-                // Optional: delete rnnlm/final.raw to avoid crash
-                val rnnlmFile = File("$modelDir/rnnlm/final.raw")
-                if (rnnlmFile.exists()) {
-                    Log.w("HeyLisa", "Deleting rnnlm/final.raw to prevent crash")
-                    rnnlmFile.delete()
-                }
-                model = Model(modelDir.absolutePath)
-            }
-        }
-
-        Log.d("HeyLisa", "Wake word recognizer initialized")
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startWakeWordDetection() {
-        if (isListening) return
+        Log.d("HeyLisa", "🚀 Starting wake word detection... isListening=$isListening, isShuttingDown=$isShuttingDown, modelInit=${::model.isInitialized}")
+        if (isListening || isShuttingDown || !::model.isInitialized) return
 
-        wakeWordRecognizer?.close()
-        wakeWordRecognizer = Recognizer(model, 16000.0f)
+        synchronized(recognizerLock) {
+            try {
+                wakeWordRecognizer?.close()
+                wakeWordRecognizer = Recognizer(model, 16000.0f)
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "Failed to init wakeWordRecognizer", e)
+                return
+            }
+        }
 
         val sampleRate = 16000
         val bufferSize = AudioRecord.getMinBufferSize(
@@ -106,16 +97,19 @@ class VoskWakeWordService : Service() {
         isListening = true
 
         wakeWordJob?.cancel()
-        wakeWordJob = CoroutineScope(Dispatchers.Default).launch {
+        wakeWordJob = serviceScope.launch {
             val startTime = System.currentTimeMillis()
             val timeout = 60_000L
 
-            while (isListening && System.currentTimeMillis() - startTime < timeout) {
+            while (isListening && !isShuttingDown && System.currentTimeMillis() - startTime < timeout) {
                 try {
                     val read = audioRecord!!.read(buffer, 0, buffer.size)
                     if (read > 0) {
-                        wakeWordRecognizer?.acceptWaveForm(buffer, read)
-                        val partial = wakeWordRecognizer?.partialResult
+                        if (isShuttingDown) break
+                        synchronized(recognizerLock) {
+                            wakeWordRecognizer?.acceptWaveForm(buffer, read)
+                        }
+                        val partial = synchronized(recognizerLock) { wakeWordRecognizer?.partialResult }
                         Log.d("HeyLisa", "🔸 Partial: $partial")
                         if (partial?.contains("lisa", ignoreCase = true) == true) {
                             Log.i("HeyLisa", "✅ Wake word detected")
@@ -124,8 +118,11 @@ class VoskWakeWordService : Service() {
                                 Toast.makeText(this@VoskWakeWordService, "Hey Lisa detected!", Toast.LENGTH_SHORT).show()
                             }
                             stopListening()
-                            startSpeechRecognition()
-                            return@launch
+                            serviceScope.launch {
+                                delay(200) // allow mic to release
+                                startSpeechRecognition()
+                            }
+
                         }
                     }
                     delay(10)
@@ -143,10 +140,14 @@ class VoskWakeWordService : Service() {
     private fun startSpeechRecognition() {
         serviceScope.launch {
             try {
-                speechRecognizer?.close()
-                delay(100) // ensure it's fully released
+                closeSpeechRecognizerSafely()
+                delay(100)
 
-                speechRecognizer = Recognizer(model, 16000.0f)
+                if (isShuttingDown) return@launch
+
+                synchronized(recognizerLock) {
+                    speechRecognizer = Recognizer(model, 16000.0f)
+                }
 
                 val sampleRate = 16000
                 val bufferSize = AudioRecord.getMinBufferSize(
@@ -181,26 +182,28 @@ class VoskWakeWordService : Service() {
                 val startTime = System.currentTimeMillis()
 
                 record.startRecording()
-
                 var previousPartial = ""
-                while (System.currentTimeMillis() - lastVoiceTime < silenceTimeout &&
+
+                while (!isShuttingDown &&
+                    System.currentTimeMillis() - lastVoiceTime < silenceTimeout &&
                     System.currentTimeMillis() - startTime < maxListenTime) {
 
                     val read = record.read(buffer, 0, buffer.size)
                     if (read > 0) {
-                        speechRecognizer?.acceptWaveForm(buffer, read)
+                        if (isShuttingDown) break
+                        synchronized(recognizerLock) {
+                            speechRecognizer?.acceptWaveForm(buffer, read)
+                        }
                         val partial = speechRecognizer?.partialResult
                         Log.d("HeyLisa", "👂 Partial: $partial")
 
                         val currentText = Regex("\"partial\" ?: ?\"(.*?)\"").find(partial ?: "")?.groupValues?.getOrNull(1)
                         if (!currentText.isNullOrBlank()) {
-                            Log.d("HeyLisa", "👂 Interim: $currentText")
                             if (currentText != previousPartial) {
                                 previousPartial = currentText
                                 lastVoiceTime = System.currentTimeMillis()
                             }
                         }
-
                     }
 
                     delay(10)
@@ -222,7 +225,6 @@ class VoskWakeWordService : Service() {
                     Toast.makeText(applicationContext, "You said: $finalSpeech", Toast.LENGTH_LONG).show()
                 }
 
-
                 sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
                     putExtra("result", finalSpeech)
                 })
@@ -230,9 +232,58 @@ class VoskWakeWordService : Service() {
             } catch (e: Exception) {
                 Log.e("HeyLisa", "❌ Speech recognition failed", e)
             } finally {
+                closeSpeechRecognizerSafely()
+                isListening = false // 💥 force it false before restart
+
+                delay(300)
+
+                if (!isShuttingDown) {
+                    startWakeWordDetection()
+                }
+            }
+        }
+    }
+
+    private fun stopListening() {
+        isListening = false
+        audioRecord?.apply {
+            if (recordingState == AudioRecord.RECORDSTATE_RECORDING) stop()
+            release()
+        }
+        audioRecord = null
+
+        synchronized(recognizerLock) {
+            wakeWordRecognizer?.close()
+            wakeWordRecognizer = null
+        }
+    }
+
+    private fun stopSelfSafely() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun closeSpeechRecognizerSafely() {
+        synchronized(recognizerLock) {
+            try {
                 speechRecognizer?.close()
-                speechRecognizer = null
-                startWakeWordDetection()
+            } catch (_: Exception) {}
+            speechRecognizer = null
+        }
+    }
+
+    private suspend fun initModel() {
+        val modelDir = File(filesDir, "vosk-model")
+        if (!modelDir.exists()) throw IOException("Model not found")
+
+        withContext(Dispatchers.IO) {
+            withTimeout(60_000) {
+                val rnnlmFile = File("$modelDir/rnnlm/final.raw")
+                if (rnnlmFile.exists()) {
+                    Log.w("HeyLisa", "Deleting rnnlm/final.raw to prevent crash")
+                    rnnlmFile.delete()
+                }
+                model = Model(modelDir.absolutePath)
             }
         }
     }
@@ -248,30 +299,6 @@ class VoskWakeWordService : Service() {
         return result.joinToString(" ")
     }
 
-
-    private fun stopListening() {
-        isListening = false
-        wakeWordJob?.cancel()
-        audioRecord?.apply {
-            if (recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                stop()
-            }
-            release()
-        }
-        audioRecord = null
-        wakeWordRecognizer?.close()
-        wakeWordRecognizer = null
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        stopListening()
-        speechRecognizer?.close()
-        model.close()
-        serviceScope.cancel()
-        stopForeground(true)
-    }
-
     private fun createNotification(content: String): Notification {
         return NotificationCompat.Builder(this, "vosk_channel")
             .setContentTitle("Hey Lisa")
@@ -283,10 +310,34 @@ class VoskWakeWordService : Service() {
 
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
-            "vosk_channel",
-            "Vosk Wake Word Channel",
-            NotificationManager.IMPORTANCE_LOW
+            "vosk_channel", "Vosk Wake Word Channel", NotificationManager.IMPORTANCE_LOW
         )
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    override fun onDestroy() {
+        // 1. Mark service shutting down
+        isShuttingDown = true
+
+        // 2. Clean up all resources
+        stopListening()
+        closeSpeechRecognizerSafely()
+        synchronized(recognizerLock) {
+            wakeWordRecognizer?.close()
+            wakeWordRecognizer = null
+            speechRecognizer = null
+        }
+
+        // 3. Close model
+        if (::model.isInitialized) {
+            model.close()
+        }
+
+        // 4. Stop coroutines and foreground
+        serviceScope.cancel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+
+        // 5. Call super last
+        super.onDestroy()
     }
 }
