@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
+import com.example.heylisa.voice.VoiceInputActivity
 import kotlinx.coroutines.*
 import org.vosk.Model
 import org.vosk.Recognizer
@@ -123,8 +124,13 @@ class VoskWakeWordService : Service() {
                             }
                             stopListening()
                             serviceScope.launch {
+                                val intent = Intent(applicationContext, VoiceInputActivity::class.java).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                startActivity(intent)
+
                                 delay(200)
-                                startSpeechRecognition() // now awaited
+                                startSpeechRecognition()
                             }
 
 
@@ -207,6 +213,10 @@ class VoskWakeWordService : Service() {
                             if (currentText != previousPartial) {
                                 previousPartial = currentText
                                 lastVoiceTime = System.currentTimeMillis()
+
+                                sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
+                                    putExtra("text", currentText)
+                                })
                             }
                         }
                     }
@@ -243,6 +253,8 @@ class VoskWakeWordService : Service() {
                 delay(300)
 
                 if (!isShuttingDown) {
+                    // Clear UI text field
+                    sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
                     startWakeWordDetection()
                 }
             }

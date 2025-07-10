@@ -1,6 +1,10 @@
 package com.example.heylisa.voice
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +15,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -24,35 +29,39 @@ import java.util.*
 
 class VoiceInputActivity : ComponentActivity() {
 
-    private lateinit var speechRecognizer: SpeechRecognizer
     private var isListening = false
 
+    private val partialText = mutableStateOf("")
+
+    private val partialReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "com.example.heylisa.PARTIAL_TEXT" -> {
+                    val text = intent.getStringExtra("text") ?: return
+                    partialText.value = text
+                }
+                "com.example.heylisa.CLEAR_TEXT" -> {
+                    partialText.value = ""
+                }
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
 
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-
-        val text = mutableStateOf("")
+        val filter = IntentFilter().apply {
+            addAction("com.example.heylisa.PARTIAL_TEXT")
+            addAction("com.example.heylisa.CLEAR_TEXT")
+        }
+        registerReceiver(partialReceiver, filter, Context.RECEIVER_EXPORTED)
 
         enableEdgeToEdge()
         setContent {
             LaunchedEffect(Unit) {
                 isListening = true
-                startSpeechRecognition(
-                    onResult = {
-                        text.value = it
-                        isListening = false
-                        //restartWakeWordServiceAndFinish()
-                    },
-                    onPartial = {
-                        text.value = it
-                    },
-                    onError = {
-                        isListening = false
-                        //restartWakeWordServiceAndFinish()
-                    }
-                )
             }
 
             Box(
@@ -60,8 +69,6 @@ class VoiceInputActivity : ComponentActivity() {
                     .fillMaxSize()
                     .background(Color(0x00000000))
                     .clickable {
-                        speechRecognizer.destroy()
-                        restartWakeWordService()
                         finish()
                     }
             ) {
@@ -74,32 +81,18 @@ class VoiceInputActivity : ComponentActivity() {
                         .clickable(enabled = false){},
                     contentAlignment = Alignment.Center
                 ) {
-                    HeyLisaBar(text = text,
+                    HeyLisaBar(text = partialText,
                         onMicClick = {
                             if (!isListening) {
-                                text.value = ""
+                                partialText.value = ""
                                 isListening = true
-                                startSpeechRecognition(
-                                    onResult = {
-                                        text.value = it
-                                        isListening = false
-                                        //restartWakeWordServiceAndFinish()
-                                    },
-                                    onPartial = {
-                                        text.value = it
-                                    },
-                                    onError = {
-                                        isListening = false
-                                        //restartWakeWordServiceAndFinish()
-                                    }
-                                )
                             }
                         },
                         onSendClick = {
-                            text.value = ""
+                            partialText.value = ""
                         },
                         onTextChange = {
-                            text.value = it
+                            partialText.value = it
                         }
                     )
                 }
@@ -107,55 +100,8 @@ class VoiceInputActivity : ComponentActivity() {
         }
     }
 
-
-    private fun startSpeechRecognition(
-        onResult: (String) -> Unit,
-        onPartial: (String) -> Unit,
-        onError: () -> Unit
-    ) {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        }
-
-        speechRecognizer.setRecognitionListener(null)
-        speechRecognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-
-            override fun onError(error: Int) = onError()
-
-            override fun onResults(results: Bundle?) {
-                val result = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                onResult(result ?: "")
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                val result = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                onPartial(result ?: "")
-            }
-
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-
-        speechRecognizer.startListening(intent)
-    }
-
-    private fun restartWakeWordService() {
-        val serviceIntent = Intent(this, com.example.heylisa.util.VoskWakeWordService::class.java)
-        Log.d("VoiceInput", "Requesting VoskWakeWordService restart")
-        startService(serviceIntent)
-    }
-
-
     override fun onDestroy() {
         super.onDestroy()
-        if (::speechRecognizer.isInitialized) {
-            speechRecognizer.cancel()
-        }
+        unregisterReceiver(partialReceiver)
     }
 }
