@@ -8,7 +8,6 @@ import android.content.*
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.net.Uri
 import android.os.*
-import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -21,9 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.heylisa.ui.theme.HeyLisaTheme
@@ -61,6 +58,17 @@ class MainActivity : ComponentActivity() {
         if (isAudioPermissionGranted && isGranted) handleModelSetup()
     }
 
+    private val assistantRoleLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            Toast.makeText(this, "Assistant role granted.", Toast.LENGTH_LONG).show()
+        } else {
+            val intent = Intent(android.provider.Settings.ACTION_VOICE_INPUT_SETTINGS)
+            startActivity(intent)
+        }
+    }
+
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,7 +76,7 @@ class MainActivity : ComponentActivity() {
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
         checkAndRequestPermission()
-        requestBatteryOptimizationException()
+        //requestBatteryOptimizationException()
 
         setContent {
             HeyLisaTheme {
@@ -116,23 +124,24 @@ class MainActivity : ComponentActivity() {
             else -> showConfirmationDialog = true
         }
     }
-    private fun requestBatteryOptimizationException() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        val packageName = packageName
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                try {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    Log.e("HeyLisa", "Failed to request battery optimization exemption", e)
-                }
-            }
-        }
-    }
+//    private fun requestBatteryOptimizationException() {
+//        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+//        val packageName = packageName
+//
+//        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+//            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+//                try {
+//                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+//                        data = Uri.parse("package:$packageName")
+//                    }
+//                    startActivity(intent)
+//                } catch (e: Exception) {
+//                    Log.e("HeyLisa", "Failed to request battery optimization exemption", e)
+//                }
+//            }
+//        }
+//    }
 
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -214,12 +223,17 @@ class MainActivity : ComponentActivity() {
             },
             onDone = {
                 showDialog = false
-                val roleManager = getSystemService(RoleManager::class.java)
-                if (!roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
-                    startActivity(Intent(android.provider.Settings.ACTION_VOICE_INPUT_SETTINGS))
-                }
+                requestAssistantRole()
             }
         )
+    }
+
+    private fun requestAssistantRole() {
+        val roleManager = getSystemService(RoleManager::class.java)
+        if (!roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
+            val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)
+            assistantRoleLauncher.launch(intent)
+        }
     }
 }
 
