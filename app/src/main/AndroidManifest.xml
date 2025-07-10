@@ -32,8 +32,6 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-                <action android:name="android.intent.action.ASSIST" />
-                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
@@ -43,7 +41,13 @@
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
-            android:excludeFromRecents="true" />
+            android:excludeFromRecents="true">
+                <intent-filter>
+                    <action android:name="android.intent.action.ASSIST" />
+                    <category android:name="android.intent.category.DEFAULT" />
+                </intent-filter>
+
+        </activity>
 
         <activity
             android:name=".custom.SettingsActivity"
@@ -77,12 +81,9 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.SCREEN_OFF" />
-                <action android:name="android.intent.action.SCREEN_ON" />
-                <action android:name="android.intent.action.USER_PRESENT" />
+                <action android:name="android.intent.action.USER_PRESENT"/>
             </intent-filter>
         </receiver>
-
-
     </application>
 
 </manifest>

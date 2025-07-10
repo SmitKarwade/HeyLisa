@@ -2,5 +2,6 @@
 <voice-interaction-service
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:sessionService="com.example.heylisa.custom.LisaVoiceSessionService"
-    android:recognitionService="com.example.heylisa.custom.LisaRecognitionService"
-    android:settingsActivity="com.example.heylisa.custom.SettingsActivity" />
+    android:settingsActivity="com.example.heylisa.custom.SettingsActivity"
+    android:supportsAssist="true"
+    android:supportsLaunchVoiceAssistFromKeyguard="true"/>

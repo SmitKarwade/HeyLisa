@@ -2,15 +2,21 @@ package com.example.heylisa.util
 
 import android.Manifest
 import android.app.*
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.*
+import android.net.Uri
 import android.os.*
+import android.provider.Settings
+import android.service.voice.VoiceInteractionSession
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
+import com.example.heylisa.custom.LisaVoiceInteractionService
 import com.example.heylisa.voice.VoiceInputActivity
 import kotlinx.coroutines.*
 import org.vosk.Model
@@ -44,6 +50,7 @@ class VoskWakeWordService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        createWakeWordAlertChannel()
         startForeground(1, createNotification("Listening for 'Hey Lisa'..."))
 
         serviceScope.launch {
@@ -126,12 +133,14 @@ class VoskWakeWordService : Service() {
                             serviceScope.launch {
                                 val isAssistant = CheckRole.isDefaultAssistant(this@VoskWakeWordService)
                                 Log.d("HeyLisa", "🎙 Is Default Assistant: $isAssistant")
-                                if(CheckRole.isDefaultAssistant(this@VoskWakeWordService)){
+
+                                if (CheckRole.isDefaultAssistant(this@VoskWakeWordService)) {
                                     val intent = Intent(this@VoskWakeWordService, VoiceInputActivity::class.java).apply {
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                                     }
                                     startActivity(intent)
-                                }else{
+
+                                } else {
                                     Handler.createAsync(Looper.getMainLooper()).post {
                                         Toast.makeText(this@VoskWakeWordService, "Assistant role is not set.", Toast.LENGTH_LONG).show()
                                     }
@@ -151,7 +160,7 @@ class VoskWakeWordService : Service() {
                     break
                 }
             }
-
+            showWakeWordDetectedNotification()
             stopListening()
         }
     }
@@ -339,6 +348,71 @@ class VoskWakeWordService : Service() {
         )
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
+
+    private fun createWakeWordAlertChannel() {
+        val channelId = "wake_word_alert_channel"
+        val channelName = "Wake Word Alerts"
+        val channelDescription = "Notifications when 'Hey Lisa' is detected"
+        val importance = NotificationManager.IMPORTANCE_HIGH
+
+        val channel = NotificationChannel(channelId, channelName, importance).apply {
+            description = channelDescription
+            enableLights(true)
+            enableVibration(true)
+            setShowBadge(true)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun showWakeWordDetectedNotification() {
+        if (isAppInForeground()) {
+            Log.d("HeyLisa", "App is in foreground – not showing notification")
+            return
+        }
+
+        val intent = Intent(this, VoiceInputActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notification = NotificationCompat.Builder(this, "wake_word_alert_channel") // 👈 Important
+            .setContentTitle("Hey Lisa Detected")
+            .setContentText("Tap to speak with Lisa")
+            .setSmallIcon(R.drawable.mic)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(2, notification)
+    }
+
+
+    private fun isAppInForeground(): Boolean {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val appProcesses = activityManager.runningAppProcesses ?: return false
+        val packageName = packageName
+
+        for (appProcess in appProcesses) {
+            if (appProcess.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
+                appProcess.processName == packageName) {
+                return true
+            }
+        }
+        return false
+    }
+
+
 
     override fun onDestroy() {
         // 1. Mark service shutting down

@@ -223,7 +223,15 @@ class MainActivity : ComponentActivity() {
             },
             onDone = {
                 showDialog = false
+                val prefs = getSharedPreferences("setup_state", Context.MODE_PRIVATE)
                 requestAssistantRole()
+                prefs.edit().putBoolean("setup_done", true).apply()
+                val serviceIntent = Intent(this, VoskWakeWordService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
             }
         )
     }
