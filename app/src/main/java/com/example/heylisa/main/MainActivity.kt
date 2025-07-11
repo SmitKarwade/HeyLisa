@@ -8,6 +8,7 @@ import android.content.*
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.net.Uri
 import android.os.*
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -76,7 +77,6 @@ class MainActivity : ComponentActivity() {
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
         checkAndRequestPermission()
-        //requestBatteryOptimizationException()
 
         setContent {
             HeyLisaTheme {
@@ -124,24 +124,6 @@ class MainActivity : ComponentActivity() {
             else -> showConfirmationDialog = true
         }
     }
-
-//    private fun requestBatteryOptimizationException() {
-//        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-//        val packageName = packageName
-//
-//        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-//            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-//                try {
-//                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-//                        data = Uri.parse("package:$packageName")
-//                    }
-//                    startActivity(intent)
-//                } catch (e: Exception) {
-//                    Log.e("HeyLisa", "Failed to request battery optimization exemption", e)
-//                }
-//            }
-//        }
-//    }
 
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -224,24 +206,88 @@ class MainActivity : ComponentActivity() {
             onDone = {
                 showDialog = false
                 val prefs = getSharedPreferences("setup_state", Context.MODE_PRIVATE)
-                requestAssistantRole()
                 prefs.edit().putBoolean("setup_done", true).apply()
-                val serviceIntent = Intent(this, VoskWakeWordService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(serviceIntent)
-                } else {
-                    startService(serviceIntent)
-                }
+
+                requestAllDefaultAssistantRequirements()
+
+                maybeStartServiceIfReady()
             }
         )
     }
 
-    private fun requestAssistantRole() {
+    private fun allRequirementsMet(): Boolean {
+        val roleManager = getSystemService(RoleManager::class.java)
+        val isAssistant = roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
+        val canDraw = Settings.canDrawOverlays(this)
+        val voiceService = Settings.Secure.getString(contentResolver, "voice_interaction_service")
+        val isVoiceService = voiceService?.contains("com.example.heylisa/.custom.LisaVoiceInteractionService") == true
+        Log.d("HeyLisa", "Assistant: $isAssistant, Can Draw: $canDraw, Voice Service: $isVoiceService")
+        return isAssistant && canDraw && isVoiceService
+    }
+
+    private fun startWakeWordService() {
+        val serviceIntent = Intent(this, VoskWakeWordService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+    }
+
+    private fun isVoiceInteractionServiceSet(): Boolean {
+        val currentService = Settings.Secure.getString(contentResolver, "voice_interaction_service")
+        return currentService?.contains("com.example.heylisa/.custom.LisaVoiceInteractionService") == true
+    }
+
+    private fun maybeStartServiceIfReady() {
+        if (allRequirementsMet()) {
+            startWakeWordService()
+        } else {
+            Toast.makeText(this, "Lisa is not ready yet. Complete all setup steps.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun requestAllDefaultAssistantRequirements() {
+        val shared = getSharedPreferences("setup_state", Context.MODE_PRIVATE)
+
+        // 1. Request Assistant Role
         val roleManager = getSystemService(RoleManager::class.java)
         if (!roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
             val intent = roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT)
             assistantRoleLauncher.launch(intent)
+            return // Wait for result before continuing
         }
+
+        // 2. Request SYSTEM_ALERT_WINDOW
+        if (!Settings.canDrawOverlays(this)) {
+            val overlayIntent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(overlayIntent)
+            Toast.makeText(this, "Please enable 'Draw over other apps'", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        // 3. Prompt for Voice Interaction Service if not already done
+        val alreadyPrompted = shared.getBoolean("voice_interaction_prompted", false)
+        if (!isVoiceInteractionServiceSet() && !alreadyPrompted) {
+            Toast.makeText(
+                this,
+                "Please set Lisa as your default Voice Interaction Service",
+                Toast.LENGTH_LONG
+            ).show()
+            startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+            shared.edit().putBoolean("voice_interaction_prompted", true).apply()
+            return
+        }
+
+        maybeStartServiceIfReady()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Toast.makeText(this, "onResume", Toast.LENGTH_LONG).show()
+        maybeStartServiceIfReady()
     }
 }
 
