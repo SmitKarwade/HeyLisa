@@ -52,7 +52,7 @@ class VoskWakeWordService : Service() {
         super.onCreate()
         createNotificationChannel()
         createWakeWordAlertChannel()
-        startForeground(1, createNotification("Listening for 'Hey Lisa'..."))
+        startForeground(1, createNotification("Hey Lisa is listening..."))
 
         serviceScope.launch {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -227,10 +227,7 @@ class VoskWakeWordService : Service() {
         serviceScope.launch {
             try {
                 closeSpeechRecognizerSafely()
-                delay(800)
-                Handler.createAsync(Looper.getMainLooper()).post {
-                    Toast.makeText(applicationContext, "Listening...", Toast.LENGTH_SHORT).show()
-                }
+                delay(200)
 
                 if (isShuttingDown) return@launch
 
@@ -252,7 +249,7 @@ class VoskWakeWordService : Service() {
                 }
 
                 val record = AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
                     sampleRate,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
@@ -443,14 +440,15 @@ class VoskWakeWordService : Service() {
         return NotificationCompat.Builder(this, "vosk_channel")
             .setContentTitle("Hey Lisa")
             .setContentText(content)
+            .setSilent(true)
             .setSmallIcon(R.drawable.mic)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
     }
 
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
-            "vosk_channel", "Vosk Wake Word Channel", NotificationManager.IMPORTANCE_LOW
+            "vosk_channel", "Vosk Wake Word Channel", NotificationManager.IMPORTANCE_MIN
         )
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
