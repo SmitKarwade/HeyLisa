@@ -182,10 +182,9 @@ class VoskWakeWordService : Service() {
                                     Log.d("HeyLisa", "🎙 Is Default Assistant: $isAssistant")
 
                                     if (isAssistant) {
-                                        val intent = Intent(this@VoskWakeWordService, VoiceInputActivity::class.java).apply {
-                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                                        }
-                                        startActivity(intent)
+                                        val assistIntent = Intent(Intent.ACTION_ASSIST)
+                                        assistIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        startActivity(assistIntent)
                                     } else {
                                         Handler.createAsync(Looper.getMainLooper()).post {
                                             Toast.makeText(this@VoskWakeWordService, "Assistant role is not set.", Toast.LENGTH_LONG).show()
@@ -395,7 +394,10 @@ class VoskWakeWordService : Service() {
 
         // 4. Restart listening
         isListening = false
-        startWakeWordDetection()
+        serviceScope.launch {
+            delay(300)
+            startWakeWordDetection()
+        }
         Log.i("HeyLisa", "🔁 Restarted recognizer and mic after invalid input")
     }
 
