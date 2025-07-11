@@ -170,7 +170,7 @@ class VoskWakeWordService : Service() {
 
                             Log.d("HeyLisa", "🧹 Cleaned Accumulated: $cleaned | Joined: \"$joined\"")
 
-                            if ("hey lisa" in joined || "he lisa" in joined || "hi lisa" in cleaned || "hey lisa" in fuzzyJoined || "elisa" in joined || "he lisa" in fuzzyJoined || "hi lisa" in fuzzyJoined) {
+                            if ("hey lisa" in joined || "he lisa" in joined || "hi lisa" in joined || "hear lisa" in joined || "hey lisa" in fuzzyJoined || "elisa" in joined || "he lisa" in fuzzyJoined || "hi lisa" in fuzzyJoined) {
                                 Log.i("HeyLisa", "✅ Wake word detected: $spoken")
                                 isListening = false
                                 withContext(Dispatchers.Main) {
@@ -206,40 +206,11 @@ class VoskWakeWordService : Service() {
                         }
                         Log.w("HeyLisa", "🌀 Silence for too long — full refresh of recognizer and mic")
 
-                        // Stop audio
-                        try {
-                            audioRecord?.stop()
-                        } catch (_: Exception) {}
-
-                        audioRecord?.release()
-                        audioRecord = null
-
-                        // Reset recognizer
-                        synchronized(recognizerLock) {
-                            wakeWordRecognizer?.close()
-                            wakeWordRecognizer = Recognizer(model, 16000.0f, "[\"hey lisa\", \"lisa\"]")
+                        launch {
+                            restartAudioRecordAndRecognizer()
                         }
-
-                        // Restart mic
-                        val sampleRate = 16000
-                        val bufferSize = AudioRecord.getMinBufferSize(
-                            sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-                        )
-                        audioRecord = AudioRecord(
-                            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                            sampleRate,
-                            AudioFormat.CHANNEL_IN_MONO,
-                            AudioFormat.ENCODING_PCM_16BIT,
-                            bufferSize
-                        )
-
-                        if (audioRecord?.state == AudioRecord.STATE_INITIALIZED) {
-                            audioRecord?.startRecording()
-                            Log.i("HeyLisa", "🎙 Mic and recognizer restarted after silence")
-                            lastValidSpeechTime = System.currentTimeMillis()
-                        } else {
-                            Log.e("HeyLisa", "❌ Failed to reinitialize mic")
-                        }
+                        break
+                        lastValidSpeechTime = System.currentTimeMillis()
                     }
 
                     delay(10)
@@ -393,22 +364,6 @@ class VoskWakeWordService : Service() {
         }
     }
 
-    private fun shouldRestart(spoken: String?): Boolean {
-        if (spoken.isNullOrBlank()) return false
-
-        val cleaned = spoken.lowercase().trim()
-        val words = cleaned.split(" ").filter { it.isNotBlank() }
-
-        // Accept only up to 2 words
-        if (words.size > 2) return true
-
-        // Allow fuzzy matches
-        val phrase = words.joinToString(" ")
-        val acceptedPhrases = setOf("hey lisa", "hi lisa", "he lisa")
-        if (phrase !in acceptedPhrases) return true
-
-        return false
-    }
 
     private fun stopSelfSafely() {
         stopForeground(STOP_FOREGROUND_REMOVE)
