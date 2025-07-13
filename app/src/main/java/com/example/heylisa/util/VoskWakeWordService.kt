@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
+import com.example.heylisa.constant.Noisy
 import com.example.heylisa.custom.LisaVoiceInteractionService
 import com.example.heylisa.voice.VoiceInputActivity
 import kotlinx.coroutines.*
@@ -223,7 +224,9 @@ class VoskWakeWordService : Service() {
     }
 
     private fun startSpeechRecognition() {
+
         serviceScope.launch {
+            var isValidSpeech = false
             try {
                 closeSpeechRecognizerSafely()
                 delay(200)
@@ -317,16 +320,23 @@ class VoskWakeWordService : Service() {
                 record.stop()
                 record.release()
 
-                val finalSpeech = cleanRepeatedWords(speechBuilder.toString().trim())
-                Log.i("HeyLisa", "✅ You said: $finalSpeech")
+                val finalSpeech = cleanRepeatedWords(speechBuilder.toString().trim().lowercase())
+                isValidSpeech = finalSpeech.isNotBlank() && finalSpeech !in Noisy.noisyWords
 
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(applicationContext, "You said: $finalSpeech", Toast.LENGTH_LONG).show()
+                if (isValidSpeech) {
+                    Log.i("HeyLisa", "✅ You said: $finalSpeech")
+
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(applicationContext, "You said: $finalSpeech", Toast.LENGTH_LONG).show()
+                    }
+
+                    sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
+                        putExtra("result", finalSpeech)
+                    })
+                } else {
+                    Log.w("HeyLisa", "⚠️ No valid speech or only noise ('$finalSpeech') — returning to wake word")
                 }
 
-                sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
-                    putExtra("result", finalSpeech)
-                })
 
             } catch (e: Exception) {
                 Log.e("HeyLisa", "❌ Speech recognition failed", e)
@@ -334,10 +344,162 @@ class VoskWakeWordService : Service() {
                 closeSpeechRecognizerSafely()
                 isListening = false
                 delay(300)
+
                 if (!isShuttingDown) {
                     sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
-                    startWakeWordDetection()
+                    if (isValidSpeech) {
+                        startFollowUpListenerWindow() // 🔁 Start follow-up if valid speech
+                    } else {
+                        startWakeWordDetection() // 🔁 If no valid speech, go back to wake word
+                    }
                 }
+            }
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startFollowUpListenerWindow() {
+        serviceScope.launch {
+            try {
+                closeSpeechRecognizerSafely()
+                delay(200)
+
+                if (isShuttingDown) return@launch
+
+                synchronized(recognizerLock) {
+                    speechRecognizer = Recognizer(model, 16000.0f)
+                }
+
+                val sampleRate = 16000
+                val bufferSize = max(
+                    AudioRecord.getMinBufferSize(
+                        sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+                    ), 2048 * 2
+                )
+
+                val record = AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+
+                if (record.state != AudioRecord.STATE_INITIALIZED) {
+                    Log.e("HeyLisa", "Follow-up AudioRecord init failed")
+                    return@launch
+                }
+
+                val buffer = ByteArray(bufferSize)
+                val speechBuilder = StringBuilder()
+                val silenceTimeout = 5000L
+                val maxListenTime = 20000L
+                var lastVoiceTime = System.currentTimeMillis()
+                val startTime = System.currentTimeMillis()
+                var meaningfulSpeechDetected = false
+                var onlyNoiseStart = System.currentTimeMillis()
+
+                record.startRecording()
+                repeat(3) { record.read(buffer, 0, buffer.size); delay(50) }
+                delay(300)
+
+                var previousPartial = ""
+
+                while (!isShuttingDown &&
+                    System.currentTimeMillis() - lastVoiceTime < silenceTimeout &&
+                    System.currentTimeMillis() - startTime < maxListenTime
+                ) {
+                    val read = record.read(buffer, 0, buffer.size)
+                    if (read > 0 && read % 2 == 0) {
+                        synchronized(recognizerLock) {
+                            speechRecognizer?.acceptWaveForm(buffer, read)
+                        }
+
+                        val partial = speechRecognizer?.partialResult
+                        val currentText = Regex("\"partial\"\\s*:\\s*\"(.*?)\"")
+                            .find(partial ?: "")?.groupValues?.getOrNull(1)?.lowercase()?.trim()
+
+                        if (!currentText.isNullOrBlank() && currentText == previousPartial && currentText in Noisy.noisyWords) {
+                            Log.d("HeyLisa", "⏸️ Repeated noise '$currentText' ignored")
+                            continue
+                        }
+
+
+                        if (!currentText.isNullOrBlank() && currentText != previousPartial) {
+                            previousPartial = currentText
+
+                            val words = currentText.split("\\s+".toRegex())
+                            val realWords = words.filterNot { it in Noisy.noisyWords }
+
+                            if (realWords.isNotEmpty()) {
+                                lastVoiceTime = System.currentTimeMillis()
+                                meaningfulSpeechDetected = true
+                                if (realWords.isNotEmpty()) {
+                                    lastVoiceTime = System.currentTimeMillis()
+                                    meaningfulSpeechDetected = true
+                                    onlyNoiseStart = System.currentTimeMillis() // ✅ reset only if valid speech
+                                } else {
+                                    Log.d("HeyLisa", "⚠️ Only noise again: $currentText — timer not reset")
+                                }
+                                Log.d("HeyLisa", "🗣️ Valid follow-up: $currentText")
+                            } else {
+                                Log.d("HeyLisa", "⚠️ Ignored noise: $currentText")
+                            }
+
+                            sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
+                                putExtra("text", currentText)
+                            })
+                        }
+
+                        // Stop follow-up if only noise for 10 seconds straight
+                        if (!meaningfulSpeechDetected &&
+                            System.currentTimeMillis() - onlyNoiseStart > 10_000
+                        ) {
+                            Log.w("HeyLisa", "🛑 Only noise like 'the' for 10 sec — exiting follow-up")
+                            break
+                        }
+                    }
+
+                    delay(10)
+                }
+
+                val finalResult = speechRecognizer?.finalResult
+                val finalText = Regex("\"text\"\\s*:\\s*\"(.*?)\"")
+                    .find(finalResult ?: "")?.groupValues?.getOrNull(1)
+
+                record.stop()
+                record.release()
+
+                val cleanedFinal = cleanRepeatedWords(finalText?.trim().orEmpty().lowercase())
+
+                if (cleanedFinal.isNotBlank() && cleanedFinal !in Noisy.noisyWords) {
+                    Log.i("HeyLisa", "✅ Final follow-up: $cleanedFinal")
+
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(applicationContext, "You said: $cleanedFinal", Toast.LENGTH_LONG).show()
+                    }
+
+                    sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
+                        putExtra("result", cleanedFinal)
+                    })
+
+                    delay(300)
+                    if (!isShuttingDown) {
+                        sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
+                        startFollowUpListenerWindow() // 🔁 Continue follow-up again
+                    }
+                } else {
+                    Log.d("HeyLisa", "⏹️ No valid final speech in follow-up — returning to wake word")
+                    if (!isShuttingDown) {
+                        sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
+                        startWakeWordDetection()
+                    }
+                }
+
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "❌ Follow-up error", e)
+            } finally {
+                closeSpeechRecognizerSafely()
             }
         }
     }
