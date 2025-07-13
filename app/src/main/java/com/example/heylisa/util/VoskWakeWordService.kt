@@ -47,12 +47,26 @@ class VoskWakeWordService : Service() {
         @RequiresPermission(Manifest.permission.RECORD_AUDIO)
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == "com.example.heylisa.RESTORE_WAKE_WORD") {
+                if (isShuttingDown || !::model.isInitialized) {
+                    Log.w("HeyLisa", "⚠️ Ignored restart — service is shutting down or model is not ready")
+                    return
+                }
+
+                if (isListening) {
+                    Log.w("HeyLisa", "🛑 Already listening — skipping restart")
+                    return
+                }
+
                 Log.d("HeyLisa", "VoiceInputActivity destroyed — restoring wake word detection")
-                isListening = false
                 speechSessionCancelled = true
-                closeSpeechRecognizerSafely()
+
                 stopListening()
-                startWakeWordDetection()
+                closeSpeechRecognizerSafely()
+
+                serviceScope.launch {
+                    delay(500)
+                    startWakeWordDetection()
+                }
             }
         }
     }
