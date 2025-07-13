@@ -2,22 +2,19 @@ package com.example.heylisa.util
 
 import android.Manifest
 import android.app.*
-import android.content.ComponentName
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.*
-import android.net.Uri
 import android.os.*
-import android.provider.Settings
-import android.service.voice.VoiceInteractionSession
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
 import com.example.heylisa.constant.Noisy
-import com.example.heylisa.custom.LisaVoiceInteractionService
 import com.example.heylisa.voice.VoiceInputActivity
 import kotlinx.coroutines.*
 import org.vosk.Model
@@ -36,12 +33,30 @@ class VoskWakeWordService : Service() {
 
 
     @Volatile private var isShuttingDown = false
+    @Volatile private var speechSessionCancelled = false
+
 
     private val recognizerLock = Any()
 
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private var wakeWordJob: Job? = null
+
+
+    private val restoreWakeReceiver = object : BroadcastReceiver() {
+        @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "com.example.heylisa.RESTORE_WAKE_WORD") {
+                Log.d("HeyLisa", "VoiceInputActivity destroyed — restoring wake word detection")
+                isListening = false
+                speechSessionCancelled = true
+                closeSpeechRecognizerSafely()
+                stopListening()
+                startWakeWordDetection()
+            }
+        }
+    }
+
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -51,6 +66,8 @@ class VoskWakeWordService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        val filter = IntentFilter("com.example.heylisa.RESTORE_WAKE_WORD")
+        registerReceiver(restoreWakeReceiver, filter, RECEIVER_EXPORTED)
         createNotificationChannel()
         createWakeWordAlertChannel()
         startForeground(1, createNotification("Hey Lisa is listening..."))
@@ -193,6 +210,9 @@ class VoskWakeWordService : Service() {
                                     }
 
                                     delay(500)
+                                    sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                                        putExtra("state", "wake_word_detected")
+                                    })
                                     showWakeWordDetectedNotification()
                                     startSpeechRecognition()
                                 }
@@ -281,6 +301,9 @@ class VoskWakeWordService : Service() {
                 delay(500) // Give user time to start speaking
 
                 var previousPartial = ""
+                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                    putExtra("state", "speech_recognition_started")
+                })
 
                 while (!isShuttingDown &&
                     System.currentTimeMillis() - lastVoiceTime < silenceTimeout &&
@@ -302,9 +325,13 @@ class VoskWakeWordService : Service() {
                         if (!currentText.isNullOrBlank() && currentText != previousPartial) {
                             previousPartial = currentText
                             lastVoiceTime = System.currentTimeMillis()
-                            sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
-                                putExtra("text", currentText)
-                            })
+                            if (currentText !in Noisy.noisyWords) {
+                                sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
+                                    putExtra("text", currentText)
+                                })
+                            } else {
+                                Log.d("HeyLisa", "🚫 Ignored noise partial: '$currentText'")
+                            }
                         }
                     }
 
@@ -321,7 +348,8 @@ class VoskWakeWordService : Service() {
                 record.release()
 
                 val finalSpeech = cleanRepeatedWords(speechBuilder.toString().trim().lowercase())
-                isValidSpeech = finalSpeech.isNotBlank() && finalSpeech !in Noisy.noisyWords
+                val words = finalSpeech.split(" ").filterNot { it in Noisy.noisyWords }
+                isValidSpeech = words.isNotEmpty()
 
                 if (isValidSpeech) {
                     Log.i("HeyLisa", "✅ You said: $finalSpeech")
@@ -330,9 +358,12 @@ class VoskWakeWordService : Service() {
                         Toast.makeText(applicationContext, "You said: $finalSpeech", Toast.LENGTH_LONG).show()
                     }
 
-                    sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
-                        putExtra("result", finalSpeech)
-                    })
+                    if (isValidSpeech) {
+                        val cleanedFinalSpeech = words.joinToString(" ")
+                        sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
+                            putExtra("result", cleanedFinalSpeech)
+                        })
+                    }
                 } else {
                     Log.w("HeyLisa", "⚠️ No valid speech or only noise ('$finalSpeech') — returning to wake word")
                 }
@@ -343,14 +374,25 @@ class VoskWakeWordService : Service() {
             } finally {
                 closeSpeechRecognizerSafely()
                 isListening = false
-                delay(300)
+                delay(200)
 
                 if (!isShuttingDown) {
                     sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
-                    if (isValidSpeech) {
-                        startFollowUpListenerWindow() // 🔁 Start follow-up if valid speech
+
+                    if (speechSessionCancelled) {
+                        Log.w("HeyLisa", "⚠️ Main speech session was cancelled — skipping follow-up")
+                        speechSessionCancelled = false
+                        sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                            putExtra("state", "wake_word_listening")
+                        })
+                        startWakeWordDetection()
+                    } else if (isValidSpeech) {
+                        startFollowUpListenerWindow()
                     } else {
-                        startWakeWordDetection() // 🔁 If no valid speech, go back to wake word
+                        sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                            putExtra("state", "wake_word_listening")
+                        })
+                        startWakeWordDetection()
                     }
                 }
             }
@@ -392,7 +434,7 @@ class VoskWakeWordService : Service() {
 
                 val buffer = ByteArray(bufferSize)
                 val speechBuilder = StringBuilder()
-                val silenceTimeout = 5000L
+                val silenceTimeout = 3000L
                 val maxListenTime = 20000L
                 var lastVoiceTime = System.currentTimeMillis()
                 val startTime = System.currentTimeMillis()
@@ -404,6 +446,9 @@ class VoskWakeWordService : Service() {
                 delay(300)
 
                 var previousPartial = ""
+                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                    putExtra("state", "speech_recognition_started")
+                })
 
                 while (!isShuttingDown &&
                     System.currentTimeMillis() - lastVoiceTime < silenceTimeout &&
@@ -437,7 +482,7 @@ class VoskWakeWordService : Service() {
                                 if (realWords.isNotEmpty()) {
                                     lastVoiceTime = System.currentTimeMillis()
                                     meaningfulSpeechDetected = true
-                                    onlyNoiseStart = System.currentTimeMillis() // ✅ reset only if valid speech
+                                    onlyNoiseStart = System.currentTimeMillis()
                                 } else {
                                     Log.d("HeyLisa", "⚠️ Only noise again: $currentText — timer not reset")
                                 }
@@ -446,12 +491,16 @@ class VoskWakeWordService : Service() {
                                 Log.d("HeyLisa", "⚠️ Ignored noise: $currentText")
                             }
 
-                            sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
-                                putExtra("text", currentText)
-                            })
+                            if (currentText !in Noisy.noisyWords) {
+                                sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
+                                    putExtra("text", currentText)
+                                })
+                            } else {
+                                Log.d("HeyLisa", "🚫 Ignored noise partial: '$currentText'")
+                            }
                         }
 
-                        // Stop follow-up if only noise for 10 seconds straight
+
                         if (!meaningfulSpeechDetected &&
                             System.currentTimeMillis() - onlyNoiseStart > 10_000
                         ) {
@@ -492,6 +541,9 @@ class VoskWakeWordService : Service() {
                     Log.d("HeyLisa", "⏹️ No valid final speech in follow-up — returning to wake word")
                     if (!isShuttingDown) {
                         sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
+                        sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                            putExtra("state", "wake_word_listening")
+                        })
                         startWakeWordDetection()
                     }
                 }
@@ -690,6 +742,7 @@ class VoskWakeWordService : Service() {
     override fun onDestroy() {
         // 1. Mark service shutting down
         isShuttingDown = true
+        unregisterReceiver(restoreWakeReceiver)
 
         // 2. Clean up all resources
         stopListening()

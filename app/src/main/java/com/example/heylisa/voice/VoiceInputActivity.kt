@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,10 +21,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
+import com.example.heylisa.constant.Noisy
 
 class VoiceInputActivity : ComponentActivity() {
 
-    private var isListening = false
+    private val isListening = mutableStateOf(false)
 
     private val partialText = mutableStateOf("")
 
@@ -32,10 +34,36 @@ class VoiceInputActivity : ComponentActivity() {
             when (intent?.action) {
                 "com.example.heylisa.PARTIAL_TEXT" -> {
                     val text = intent.getStringExtra("text") ?: return
-                    partialText.value = text
+                    if (text != null && text !in Noisy.noisyWords) {
+                        partialText.value = text
+                    } else {
+                        Log.d("VoiceInputActivity", "🚫 Skipping noisy partial: $text")
+                    }
                 }
                 "com.example.heylisa.CLEAR_TEXT" -> {
                     partialText.value = ""
+                }
+            }
+        }
+    }
+
+    private val stateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "com.example.heylisa.STATE_UPDATE") {
+                val state = intent.getStringExtra("state") ?: return
+                when (state) {
+                    "wake_word_detected" -> {
+                        // Maybe show some animation or "Listening..." state
+                        Log.d("VoiceInputActivity", "Wake word detected")
+                    }
+                    "speech_recognition_started" -> {
+                        isListening.value = true
+                        Log.d("VoiceInputActivity", "Speech recognition started")
+                    }
+                    "wake_word_listening" -> {
+                        isListening.value = false
+                        Log.d("VoiceInputActivity", "Back to wake word listening")
+                    }
                 }
             }
         }
@@ -59,12 +87,16 @@ class VoiceInputActivity : ComponentActivity() {
             addAction("com.example.heylisa.PARTIAL_TEXT")
             addAction("com.example.heylisa.CLEAR_TEXT")
         }
-        registerReceiver(partialReceiver, filter, Context.RECEIVER_EXPORTED)
+        registerReceiver(partialReceiver, filter, RECEIVER_EXPORTED)
+
+        val stateFilter = IntentFilter("com.example.heylisa.STATE_UPDATE")
+        registerReceiver(stateReceiver, stateFilter, RECEIVER_EXPORTED)
+
 
         enableEdgeToEdge()
         setContent {
             LaunchedEffect(Unit) {
-                isListening = true
+                isListening.value = true
             }
 
             Box(
@@ -86,17 +118,15 @@ class VoiceInputActivity : ComponentActivity() {
                 ) {
                     HeyLisaBar(text = partialText,
                         onMicClick = {
-                            if (!isListening) {
-                                partialText.value = ""
-                                isListening = true
-                            }
+
                         },
                         onSendClick = {
                             partialText.value = ""
                         },
                         onTextChange = {
                             partialText.value = it
-                        }
+                        },
+                        isListening = isListening.value
                     )
                 }
             }
@@ -105,6 +135,8 @@ class VoiceInputActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        sendBroadcast(Intent("com.example.heylisa.RESTORE_WAKE_WORD"))
         unregisterReceiver(partialReceiver)
+        unregisterReceiver(stateReceiver)
     }
 }
