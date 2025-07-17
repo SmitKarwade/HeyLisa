@@ -1,14 +1,23 @@
 package com.example.heylisa.util
 
 import android.Manifest
-import android.app.*
+import android.app.ActivityManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.media.*
-import android.os.*
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
@@ -16,7 +25,15 @@ import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
 import com.example.heylisa.constant.Noisy
 import com.example.heylisa.voice.VoiceInputActivity
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.vosk.Model
 import org.vosk.Recognizer
 import java.io.File
@@ -206,7 +223,11 @@ class VoskWakeWordService : Service() {
                                 Log.i("HeyLisa", "✅ Wake word detected: $spoken")
                                 isListening = false
                                 withContext(Dispatchers.Main) {
-                                    Toast.makeText(this@VoskWakeWordService, "Hey Lisa detected!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        this@VoskWakeWordService,
+                                        "Hey Lisa detected!",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                                 stopListening()
                                 serviceScope.launch {
@@ -369,7 +390,11 @@ class VoskWakeWordService : Service() {
                     Log.i("HeyLisa", "✅ You said: $finalSpeech")
 
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(applicationContext, "You said: $finalSpeech", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            applicationContext,
+                            "You said: $finalSpeech",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
 
                     if (isValidSpeech) {
@@ -539,7 +564,11 @@ class VoskWakeWordService : Service() {
                     Log.i("HeyLisa", "✅ Final follow-up: $cleanedFinal")
 
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(applicationContext, "You said: $cleanedFinal", Toast.LENGTH_LONG).show()
+                        Toast.makeText(
+                            applicationContext,
+                            "You said: $cleanedFinal",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
 
                     sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
@@ -680,7 +709,8 @@ class VoskWakeWordService : Service() {
         val channel = NotificationChannel(
             "vosk_channel", "Vosk Wake Word Channel", NotificationManager.IMPORTANCE_MIN
         )
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
     }
 
     private fun createWakeWordAlertChannel() {
@@ -731,14 +761,14 @@ class VoskWakeWordService : Service() {
             .setFullScreenIntent(pendingIntent, true) // 👈 This makes it pop up
             .build()
 
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(2, notification)
     }
 
 
 
     private fun isAppInForeground(): Boolean {
-        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
         val appProcesses = activityManager.runningAppProcesses ?: return false
         val packageName = packageName
 

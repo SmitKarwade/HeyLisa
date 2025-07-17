@@ -7,6 +7,7 @@ import android.app.role.RoleManager
 import android.content.*
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.net.Uri
+import com.example.heylisa.util.VoskWakeWordService
 import android.os.*
 import android.provider.Settings
 import android.util.Log
