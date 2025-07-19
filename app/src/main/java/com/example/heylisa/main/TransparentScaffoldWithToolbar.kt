@@ -20,12 +20,16 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.heylisa.R
 import com.example.heylisa.util.VoskWakeWordService
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TransparentScaffoldWithToolbar(context: Context) {
-
+fun TransparentScaffoldWithToolbar(
+    context: Context,
+    googleSignInClient: GoogleSignInClient,
+    onSignOut: () -> Unit
+) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
@@ -67,9 +71,20 @@ fun TransparentScaffoldWithToolbar(context: Context) {
                         modifier = Modifier.padding(16.dp),
                         color = Color.Black.copy(alpha = 0.7f)
                     )
+
+
+                    Spacer(modifier = Modifier.weight(1f)) // Push content to bottom
+                    Button(
+                        onClick = onSignOut,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Red, contentColor = Color.White)
+                    ) {
+                        Text("Sign Out")
+                    }
                 }
             }
-
         }
     ) {
         Box(
@@ -93,7 +108,7 @@ fun TransparentScaffoldWithToolbar(context: Context) {
                             }
                         },
                         actions = {
-                            IconButton(onClick = { Toast.makeText(context, "Profile", Toast.LENGTH_SHORT).show()}) {
+                            IconButton(onClick = { Toast.makeText(context, "Profile", Toast.LENGTH_SHORT).show() }) {
                                 Icon(
                                     painter = painterResource(R.drawable.common_user),
                                     contentDescription = "User",

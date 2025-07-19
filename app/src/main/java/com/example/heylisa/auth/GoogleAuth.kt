@@ -2,7 +2,6 @@ package com.example.heylisa.auth
 
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,6 +21,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Scope
 
 @Composable
 fun App() {
@@ -46,14 +46,17 @@ fun GoogleSignInButton() {
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
             val account = task.getResult(ApiException::class.java)
-            // Successfully signed in
-            val idToken = account.idToken // Use this token for backend verification
+            val idToken = account.idToken
             val email = account.email
-            // Handle the signed-in user and navigate to MainActivity
-            println("Signed in as: $email, ID Token: $idToken")
+            val serverAuthCode = account.serverAuthCode // Get the authorization code
+            println("Signed in as: $email, ID Token: $idToken, Server Auth Code: $serverAuthCode")
+            // or authcode null dialog
+            if (serverAuthCode != null) {
+                exchangeAuthCodeForToken(context, serverAuthCode, email)
+            }
             navigateToMainActivity(context, idToken, email)
         } catch (e: ApiException) {
-            Log.e("Token","Sign-in failed: ${e.statusCode}, Message: ${e.message}")
+            println("Sign-in failed: ${e.statusCode}, Message: ${e.message}")
         }
     }
 
@@ -65,20 +68,26 @@ fun GoogleSignInButton() {
     }
 }
 
+fun exchangeAuthCodeForToken(context: Context, authCode: String, email: String?) {
+    println("Authorization Code: $authCode")
+    
+}
+
 fun getGoogleSignInClient(context: android.content.Context): GoogleSignInClient {
     val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-        .requestIdToken("643617418308-66gtgeohdts3fv1844jfu7sf80j4q5sn.apps.googleusercontent.com") // Replace with your Web Client ID
+        .requestIdToken("643617418308-66gtgeohdts3fv1844jfu7sf80j4q5sn.apps.googleusercontent.com") // Web Client ID
         .requestEmail()
+        .requestScopes(
+            Scope("https://www.googleapis.com/auth/gmail.readonly") // Gmail scope
+        )
         .build()
     return GoogleSignIn.getClient(context, gso)
 }
 
 fun navigateToMainActivity(context: Context, idToken: String?, email: String?) {
     val intent = Intent(context, MainActivity::class.java).apply {
-        // Pass authentication data as extras if needed
         putExtra("idToken", idToken)
         putExtra("email", email)
-        // Add flags to clear the back stack and start fresh
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
     }
     context.startActivity(intent)

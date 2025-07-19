@@ -7,6 +7,7 @@ import android.app.role.RoleManager
 import android.content.*
 import android.content.pm.PackageManager.PERMISSION_GRANTED
 import android.net.Uri
+import com.example.heylisa.auth.getGoogleSignInClient
 import com.example.heylisa.util.VoskWakeWordService
 import android.os.*
 import android.provider.Settings
@@ -29,6 +30,7 @@ import com.example.heylisa.auth.App
 import com.example.heylisa.ui.theme.HeyLisaTheme
 import com.example.heylisa.util.*
 import java.io.File
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
 
 class MainActivity : ComponentActivity() {
 
@@ -43,6 +45,8 @@ class MainActivity : ComponentActivity() {
     private var isUnzipping by mutableStateOf(false)
     private var showConfirmationDialog by mutableStateOf(false)
     private var isLoggedIn by mutableStateOf(false) // Track login state
+
+    private lateinit var googleSignInClient: GoogleSignInClient // Add GoogleSignInClient
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private val requestPermissionLauncher = registerForActivityResult(
@@ -82,9 +86,12 @@ class MainActivity : ComponentActivity() {
         val idToken = intent.getStringExtra("idToken")
         val email = intent.getStringExtra("email")
         if (idToken != null && email != null) {
-            Log.d("Token","Received from login: Email = $email, ID Token = $idToken")
-            isLoggedIn = true // Set logged-in state if token is present
+            Log.d("Token", "Received from login: Email = $email, ID Token = $idToken")
+            isLoggedIn = true
         }
+
+        // Initialize GoogleSignInClient
+        googleSignInClient = getGoogleSignInClient(this)
 
         checkAndRequestPermission()
 
@@ -100,7 +107,9 @@ class MainActivity : ComponentActivity() {
                         isUnzipping = isUnzipping,
                         showConfirmationDialog = showConfirmationDialog,
                         onDismissDialog = { showConfirmationDialog = false },
-                        onStartDownload = { modelDownload(this) }
+                        onStartDownload = { modelDownload(this) },
+                        googleSignInClient = googleSignInClient, // Pass to MainScreen
+                        onSignOut = { signOut() } // Pass sign-out callback
                     )
                 }
             }
@@ -138,7 +147,6 @@ class MainActivity : ComponentActivity() {
             else -> showConfirmationDialog = true
         }
     }
-
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun modelDownload(context: Context) {
@@ -298,6 +306,18 @@ class MainActivity : ComponentActivity() {
         maybeStartServiceIfReady()
     }
 
+    // Sign-out method
+    private fun signOut() {
+        googleSignInClient.signOut().addOnCompleteListener {
+            isLoggedIn = false // Reset login state
+            Toast.makeText(this, "Signed out successfully", Toast.LENGTH_SHORT).show()
+            // Navigate back to login screen by restarting activity with cleared state
+            val intent = Intent(this, MainActivity::class.java)
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            startActivity(intent)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         Toast.makeText(this, "onResume", Toast.LENGTH_LONG).show()
@@ -313,11 +333,16 @@ fun MainScreen(
     isUnzipping: Boolean,
     showConfirmationDialog: Boolean,
     onDismissDialog: () -> Unit,
-    onStartDownload: () -> Unit
+    onStartDownload: () -> Unit,
+    googleSignInClient: GoogleSignInClient, // Add parameter
+    onSignOut: () -> Unit // Add sign-out callback
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
-
-        TransparentScaffoldWithToolbar(context)
+        TransparentScaffoldWithToolbar(
+            context = context,
+            googleSignInClient = googleSignInClient,
+            onSignOut = onSignOut
+        )
 
         ModelDownloadDialog(
             show = showDialog,
