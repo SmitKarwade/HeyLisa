@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+
 }
 
 android {
@@ -43,10 +44,12 @@ android {
 }
 
 dependencies {
-    implementation("androidx.lifecycle:lifecycle-process:2.9.1")
+    implementation("androidx.lifecycle:lifecycle-process:2.9.2")
 
     implementation("net.java.dev.jna:jna:5.17.0@aar")
     implementation("com.alphacephei:vosk-android:0.3.47@aar")
+
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
 
 
     implementation(libs.androidx.core.ktx)

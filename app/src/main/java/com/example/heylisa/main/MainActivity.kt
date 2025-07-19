@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.core.view.WindowInsetsControllerCompat
+import com.example.heylisa.auth.App
 import com.example.heylisa.ui.theme.HeyLisaTheme
 import com.example.heylisa.util.*
 import java.io.File
@@ -41,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private var progressState by mutableFloatStateOf(0f)
     private var isUnzipping by mutableStateOf(false)
     private var showConfirmationDialog by mutableStateOf(false)
+    private var isLoggedIn by mutableStateOf(false) // Track login state
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private val requestPermissionLauncher = registerForActivityResult(
@@ -77,19 +79,30 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
+        val idToken = intent.getStringExtra("idToken")
+        val email = intent.getStringExtra("email")
+        if (idToken != null && email != null) {
+            Log.d("Token","Received from login: Email = $email, ID Token = $idToken")
+            isLoggedIn = true // Set logged-in state if token is present
+        }
+
         checkAndRequestPermission()
 
         setContent {
             HeyLisaTheme {
-                MainScreen(
-                    context = this,
-                    showDialog = showDialog,
-                    progressState = progressState,
-                    isUnzipping = isUnzipping,
-                    showConfirmationDialog = showConfirmationDialog,
-                    onDismissDialog = { showConfirmationDialog = false },
-                    onStartDownload = { modelDownload(this) }
-                )
+                if (!isLoggedIn) {
+                    App() // Show login screen if not logged in
+                } else {
+                    MainScreen(
+                        context = this,
+                        showDialog = showDialog,
+                        progressState = progressState,
+                        isUnzipping = isUnzipping,
+                        showConfirmationDialog = showConfirmationDialog,
+                        onDismissDialog = { showConfirmationDialog = false },
+                        onStartDownload = { modelDownload(this) }
+                    )
+                }
             }
         }
     }

@@ -28,6 +28,7 @@
         <activity
             android:name=".main.MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:label="@string/app_name"
             android:theme="@style/Theme.HeyLisa">
             <intent-filter>
@@ -78,13 +79,6 @@
                 android:resource="@xml/voice_interaction_service" />
         </service>
 
-        <receiver android:name=".receiver.ScreenStateReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.SCREEN_OFF" />
-                <action android:name="android.intent.action.USER_PRESENT"/>
-            </intent-filter>
-        </receiver>
     </application>
 
 </manifest>
