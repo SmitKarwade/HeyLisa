@@ -3,6 +3,7 @@ package com.example.heylisa.auth
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,7 +63,7 @@ fun GoogleSignInButton() {
             if (serverAuthCode != null) {
                 exchangeAuthCodeForToken(context, serverAuthCode, email)
             }
-            navigateToMainActivity(context, idToken, email)
+
         } catch (e: ApiException) {
             println("Sign-in failed: ${e.statusCode}, Message: ${e.message}")
         }
@@ -86,17 +87,21 @@ fun exchangeAuthCodeForToken(context: Context, authCode: String, email: String?)
                 val authResponse = response.body()
                 val accessToken = authResponse?.access_token
                 if (accessToken != null) {
-                    println("Access Token: $accessToken")
+                    Log.d("Access Token","Access Token: $accessToken")
+                    Toast.makeText(context, "Signed in successfully", Toast.LENGTH_SHORT).show()
+                    navigateToMainActivity(context, email)
                 } else {
-                    println("Access Token not found in response")
+                    Log.d("Access Token","Access Token not found in response")
                 }
             } else {
-                println("Token exchange failed: ${response.code()} - ${response.errorBody()?.string()}")
+                Log.e("Access Token","Token exchange failed: ${response.code()} - ${response.errorBody()?.string()}")
+                Toast.makeText(context, "Please try again", Toast.LENGTH_LONG).show()
             }
         }
 
         override fun onFailure(call: Call<AuthResponse>, t: Throwable) {
-            println("Token exchange failed: ${t.message}")
+            Log.e("Access Token","Token exchange failed: ${t.message}")
+            Toast.makeText(context, "Please try again", Toast.LENGTH_LONG).show()
         }
     })
 }
@@ -113,9 +118,8 @@ fun getGoogleSignInClient(context: android.content.Context): GoogleSignInClient 
     return GoogleSignIn.getClient(context, gso)
 }
 
-fun navigateToMainActivity(context: Context, idToken: String?, email: String?) {
+fun navigateToMainActivity(context: Context,email: String?) {
     val intent = Intent(context, MainActivity::class.java).apply {
-        putExtra("idToken", idToken)
         putExtra("email", email)
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
     }

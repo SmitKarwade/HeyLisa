@@ -83,10 +83,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
 
-        val idToken = intent.getStringExtra("idToken")
         val email = intent.getStringExtra("email")
-        if (idToken != null && email != null) {
-            Log.d("Token", "Received from login: Email = $email, ID Token = $idToken")
+        if (email != null) {
+            Log.d("Token", "Received from login: Email = $email")
             isLoggedIn = true
         }
 
@@ -265,7 +264,7 @@ class MainActivity : ComponentActivity() {
         if (allRequirementsMet()) {
             startWakeWordService()
         } else {
-            Toast.makeText(this, "Lisa is not ready yet. Complete all setup steps.", Toast.LENGTH_LONG).show()
+            Log.d("Setup", "Lisa is not ready yet. Complete all setup steps.")
         }
     }
 
@@ -320,7 +319,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        Toast.makeText(this, "onResume", Toast.LENGTH_LONG).show()
         maybeStartServiceIfReady()
     }
 }
