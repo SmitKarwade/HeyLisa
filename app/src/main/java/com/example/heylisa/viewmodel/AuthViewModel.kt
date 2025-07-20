@@ -3,27 +3,28 @@ package com.example.heylisa.auth
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import android.widget.Toast
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.heylisa.main.MainActivity
 import com.example.heylisa.repository.AuthRepository
-import com.example.heylisa.request.AuthClient
-import com.example.heylisa.request.AuthRequest
-import com.example.heylisa.request.AuthResponse
+import com.example.heylisa.request.DraftResponse
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import retrofit2.Call
-import retrofit2.Response
 
 class AuthViewModel(private val authRepository: AuthRepository = AuthRepository()) : ViewModel() {
     data class AuthUiState(
         val isLoading: Boolean = false,
         val error: String? = null,
         val isSignedIn: Boolean = false,
-        val email: String? = null
+        val email: String? = null,
+        val isSpeechActive: Boolean = false,
+        val speechResult: String? = null,
+        val draftResponse: DraftResponse? = null,
+        val isDraftCreated: Boolean = false
     )
 
     sealed class AuthResult {
@@ -31,8 +32,14 @@ class AuthViewModel(private val authRepository: AuthRepository = AuthRepository(
         data class Error(val message: String) : AuthResult()
     }
 
+    sealed class DraftResult {
+        data class Success(val draftResponse: DraftResponse) : DraftResult()
+        data class Error(val message: String) : DraftResult()
+    }
+
     private val _uiState = MutableStateFlow(AuthUiState())
     val uiState: StateFlow<AuthUiState> = _uiState
+
 
     fun handleSignInResult(context: Context, data: Intent?) {
         viewModelScope.launch {
@@ -47,6 +54,8 @@ class AuthViewModel(private val authRepository: AuthRepository = AuthRepository(
                     authRepository.exchangeAuthCodeForToken(context, serverAuthCode, email) { result ->
                         when (result) {
                             is AuthResult.Success -> {
+                                val token = result.accessToken
+                                TokenManager.saveToken(context, token)
                                 _uiState.value = _uiState.value.copy(
                                     isLoading = false,
                                     isSignedIn = true,
@@ -79,6 +88,65 @@ class AuthViewModel(private val authRepository: AuthRepository = AuthRepository(
         }
     }
 
+    fun handleSpeechResult(result: String?) {
+        if (result != null && result.contains("send an email to|draft an email to".toRegex())) {
+            _uiState.value = _uiState.value.copy(speechResult = result, isSpeechActive = false)
+        } else {
+            _uiState.value = _uiState.value.copy(
+                isSpeechActive = false,
+                error = "Normal Question"
+            )
+        }
+    }
+
+    fun createDraft(context: Context, prompt: String) {
+        val token = TokenManager.getToken(context)
+        token?.let { token ->
+            viewModelScope.launch {
+                _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+                authRepository.createDraft(context, prompt, token) { result ->
+                    Toast.makeText(context, "Draft created $result" , Toast.LENGTH_SHORT).show()
+                    when (result) {
+                        is DraftResult.Success -> {
+                            _uiState.value = _uiState.value.copy(
+                                isLoading = false,
+                                draftResponse = result.draftResponse
+                            )
+                        }
+                        is DraftResult.Error -> {
+                            _uiState.value = _uiState.value.copy(
+                                isLoading = false,
+                                error = result.message
+                            )
+                            Log.e("AuthViewModel", "Draft creation failed: ${result.message}")
+                        }
+                    }
+                }
+            }
+        } ?: run {
+            _uiState.value = _uiState.value.copy(
+                isLoading = false,
+                error = "No access token available. Please sign in again."
+            )
+        }
+    }
+
+    fun getFormattedEmailPreview(): String? {
+        return _uiState.value.draftResponse?.let { draft ->
+            """
+            To: ${draft.to}
+            Subject: ${draft.subject}
+            
+            ${draft.body}
+            """.trimIndent()
+        }
+    }
+
+    fun getDraftTo(): String? = _uiState.value.draftResponse?.to
+    fun getDraftSubject(): String? = _uiState.value.draftResponse?.subject
+    fun getDraftBody(): String? = _uiState.value.draftResponse?.body
+    fun getDraftId(): String? = _uiState.value.draftResponse?.draft_id
+
     private fun navigateToMainActivity(context: Context, email: String?) {
         val intent = Intent(context, MainActivity::class.java).apply {
             putExtra("email", email)
@@ -89,5 +157,17 @@ class AuthViewModel(private val authRepository: AuthRepository = AuthRepository(
 
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    fun clearDraft() {
+        _uiState.value = _uiState.value.copy(draftResponse = null, speechResult = null)
+    }
+
+    fun resetDraftState() {
+        _uiState.value = _uiState.value.copy(
+            draftResponse = null,
+            isDraftCreated = false,
+            speechResult = null
+        )
     }
 }

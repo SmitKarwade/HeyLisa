@@ -12,6 +12,12 @@ interface AuthApi {
 
     @GET("gmail/inbox/")
     fun getInbox(@Header("Authorization") authHeader: String): Call<InboxResponse>
+
+    @POST("gmail/draft/")
+    fun createDraft(
+        @Header("Authorization") authHeader: String,
+        @Body request: DraftRequest
+    ): Call<DraftResponse>
 }
 
 data class AuthRequest(
@@ -19,7 +25,6 @@ data class AuthRequest(
 )
 
 data class AuthResponse(
-    val session_key: String?,
     val access_token: String?,
     val refresh_token: String?,
     val email: String?
@@ -34,4 +39,16 @@ data class Message(
     val from: String,
     val subject: String,
     val body: String
+)
+
+data class DraftRequest(
+    val prompt: String
+)
+
+data class DraftResponse(
+    val draft_id: String,
+    val to: String,
+    val subject: String,
+    val body: String,
+    val raw_input: String
 )

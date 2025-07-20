@@ -190,7 +190,7 @@ class VoskWakeWordService : Service() {
                         }
 
                         val partial = synchronized(recognizerLock) { wakeWordRecognizer?.partialResult }
-                        Log.d("HeyLisa", "🔸 Partial: $partial")
+                        //Log.d("HeyLisa", "🔸 Partial: $partial")
 
                         val spoken = Regex("\"partial\"\\s*:\\s*\"(.*?)\"")
                             .find(partial ?: "")?.groupValues?.getOrNull(1)
@@ -217,10 +217,10 @@ class VoskWakeWordService : Service() {
                             val joined = cleaned.joinToString(" ")
                             val fuzzyJoined = joined.replace("here", "hey")
 
-                            Log.d("HeyLisa", "🧹 Cleaned Accumulated: $cleaned | Joined: \"$joined\"")
+                            //Log.d("HeyLisa", "🧹 Cleaned Accumulated: $cleaned | Joined: \"$joined\"")
 
                             if ("hey lisa" in joined || "he lisa" in joined || "hi lisa" in joined || "hear lisa" in joined || "hey lisa" in fuzzyJoined || "elisa" in joined || "he lisa" in fuzzyJoined || "hi lisa" in fuzzyJoined) {
-                                Log.i("HeyLisa", "✅ Wake word detected: $spoken")
+                                //Log.i("HeyLisa", "✅ Wake word detected: $spoken")
                                 isListening = false
                                 withContext(Dispatchers.Main) {
                                     Toast.makeText(
@@ -352,7 +352,7 @@ class VoskWakeWordService : Service() {
                         }
 
                         val partial = speechRecognizer?.partialResult
-                        Log.d("HeyLisa", "👂 Partial: $partial")
+                        //Log.d("HeyLisa", "👂 Partial: $partial")
 
                         val currentText = Regex("\"partial\"\\s*:\\s*\"(.*?)\"")
                             .find(partial ?: "")?.groupValues?.getOrNull(1)
@@ -365,7 +365,7 @@ class VoskWakeWordService : Service() {
                                     putExtra("text", currentText)
                                 })
                             } else {
-                                Log.d("HeyLisa", "🚫 Ignored noise partial: '$currentText'")
+                                //Log.d("HeyLisa", "🚫 Ignored noise partial: '$currentText'")
                             }
                         }
                     }
@@ -387,7 +387,7 @@ class VoskWakeWordService : Service() {
                 isValidSpeech = words.isNotEmpty()
 
                 if (isValidSpeech) {
-                    Log.i("HeyLisa", "✅ You said: $finalSpeech")
+                    //Log.i("HeyLisa", "✅ You said: $finalSpeech")
 
                     withContext(Dispatchers.Main) {
                         Toast.makeText(
@@ -404,7 +404,7 @@ class VoskWakeWordService : Service() {
                         })
                     }
                 } else {
-                    Log.w("HeyLisa", "⚠️ No valid speech or only noise ('$finalSpeech') — returning to wake word")
+                    //Log.w("HeyLisa", "⚠️ No valid speech or only noise ('$finalSpeech') — returning to wake word")
                 }
 
 
@@ -504,7 +504,7 @@ class VoskWakeWordService : Service() {
                             .find(partial ?: "")?.groupValues?.getOrNull(1)?.lowercase()?.trim()
 
                         if (!currentText.isNullOrBlank() && currentText == previousPartial && currentText in Noisy.noisyWords) {
-                            Log.d("HeyLisa", "⏸️ Repeated noise '$currentText' ignored")
+                            //Log.d("HeyLisa", "⏸️ Repeated noise '$currentText' ignored")
                             continue
                         }
 
@@ -523,11 +523,11 @@ class VoskWakeWordService : Service() {
                                     meaningfulSpeechDetected = true
                                     onlyNoiseStart = System.currentTimeMillis()
                                 } else {
-                                    Log.d("HeyLisa", "⚠️ Only noise again: $currentText — timer not reset")
+                                    //Log.d("HeyLisa", "⚠️ Only noise again: $currentText — timer not reset")
                                 }
-                                Log.d("HeyLisa", "🗣️ Valid follow-up: $currentText")
+                                //Log.d("HeyLisa", "🗣️ Valid follow-up: $currentText")
                             } else {
-                                Log.d("HeyLisa", "⚠️ Ignored noise: $currentText")
+                                //Log.d("HeyLisa", "⚠️ Ignored noise: $currentText")
                             }
 
                             if (currentText !in Noisy.noisyWords) {
@@ -535,7 +535,7 @@ class VoskWakeWordService : Service() {
                                     putExtra("text", currentText)
                                 })
                             } else {
-                                Log.d("HeyLisa", "🚫 Ignored noise partial: '$currentText'")
+                                //Log.d("HeyLisa", "🚫 Ignored noise partial: '$currentText'")
                             }
                         }
 
@@ -561,7 +561,7 @@ class VoskWakeWordService : Service() {
                 val cleanedFinal = cleanRepeatedWords(finalText?.trim().orEmpty().lowercase())
 
                 if (cleanedFinal.isNotBlank() && cleanedFinal !in Noisy.noisyWords) {
-                    Log.i("HeyLisa", "✅ Final follow-up: $cleanedFinal")
+                    //Log.i("HeyLisa", "✅ Final follow-up: $cleanedFinal")
 
                     withContext(Dispatchers.Main) {
                         Toast.makeText(

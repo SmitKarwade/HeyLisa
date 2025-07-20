@@ -2,10 +2,13 @@ package com.example.heylisa.repository
 
 import android.content.Context
 import android.util.Log
+import android.widget.Toast
 import com.example.heylisa.auth.AuthViewModel
 import com.example.heylisa.request.AuthClient
 import com.example.heylisa.request.AuthRequest
 import com.example.heylisa.request.AuthResponse
+import com.example.heylisa.request.DraftRequest
+import com.example.heylisa.request.DraftResponse
 import com.example.heylisa.request.InboxResponse
 import retrofit2.Call
 import retrofit2.Callback
@@ -38,6 +41,43 @@ class AuthRepository {
             override fun onFailure(call: Call<AuthResponse>, t: Throwable) {
                 Log.e("AuthRepository", "Token exchange failed: ${t.message}")
                 callback(AuthViewModel.AuthResult.Error("Token exchange failed: ${t.message}"))
+            }
+        })
+    }
+
+    fun createDraft(context: Context, prompt: String, accessToken: String, callback: (AuthViewModel.DraftResult) -> Unit) {
+        val request = DraftRequest(prompt = prompt)
+        val call = AuthClient.authApi.createDraft("Bearer $accessToken", request)
+
+        call.enqueue(object : Callback<DraftResponse> {
+            override fun onResponse(call: Call<DraftResponse>, response: Response<DraftResponse>) {
+                Toast.makeText(context, "onRespone...", Toast.LENGTH_SHORT).show()
+                Log.d("AuthRepository", "onResponse: ${response.isSuccessful}")
+                if (response.isSuccessful) {
+                    val draftResponse = response.body()
+                    if (draftResponse != null) {
+                        Log.d("AuthRepository", "Draft created: ${draftResponse.draft_id}")
+                        callback(AuthViewModel.DraftResult.Success(draftResponse))
+                    } else {
+                        val errorMessage = "Draft creation failed: Empty response body"
+                        Log.e("AuthRepository", errorMessage)
+                        callback(AuthViewModel.DraftResult.Error(errorMessage))
+                    }
+                } else {
+                    val errorMessage = try {
+                        "Draft creation failed: ${response.code()} - ${response.errorBody()?.string()}"
+                    } catch (e: Exception) {
+                        "Draft creation failed: ${response.code()} - Unable to read error body"
+                    }
+                    Log.e("AuthRepository", errorMessage)
+                    callback(AuthViewModel.DraftResult.Error(errorMessage))
+                }
+            }
+
+            override fun onFailure(call: Call<DraftResponse>, t: Throwable) {
+                val errorMessage = "Network error: ${t.message}"
+                Log.e("AuthRepository", errorMessage, t)
+                callback(AuthViewModel.DraftResult.Error(errorMessage))
             }
         })
     }

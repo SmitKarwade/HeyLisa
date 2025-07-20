@@ -8,11 +8,13 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,11 +23,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -115,16 +119,24 @@ class VoiceInputActivity : ComponentActivity() {
         setContent {
             val viewModel: AuthViewModel = viewModel()
             var showEmailCompose by remember { mutableStateOf(false) }
+            var hasCalledDraft by remember { mutableStateOf(false) } // Add this flag
             val currentFinalText = finalText.value
 
             LaunchedEffect(currentFinalText) {
                 Log.d("VoiceInputActivity", "LaunchedEffect triggered with text: ${finalText.value}")
                 val text = finalText.value.lowercase()
-                if (text.isNotEmpty() && (text.contains("send an email to") || text.contains("draft an email to"))) {
-                    if (!showEmailCompose) { // Only attempt to show if not already shown
-                        Log.d("VoiceInputActivity", "Email command detected: $text. Setting showEmailCompose = true")
-                        viewModel.handleSpeechResult(currentFinalText) // Pass the captured value
+                if (text.isNotEmpty() && (text.contains("send") || text.contains("draft "))) {
+                    if (!showEmailCompose && !hasCalledDraft) { // Check both flags
+                        Log.d("VoiceInputActivity", "Email command detected: $text. Creating draft...")
+                        viewModel.handleSpeechResult(currentFinalText)
+
+                        // Call createDraft HERE, not in the compose block
+                        viewModel.createDraft(context = this@VoiceInputActivity, prompt = currentFinalText)
+
                         showEmailCompose = true
+                        hasCalledDraft = true // Set flag to prevent multiple calls
+
+                        Toast.makeText(this@VoiceInputActivity, "Creating draft", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -143,11 +155,16 @@ class VoiceInputActivity : ComponentActivity() {
             ) {
                 // Show either HeyLisaBar or EmailComposeScreen based on state
                 if (showEmailCompose) {
+                    // REMOVE this line: viewModel.createDraft(context = this@VoiceInputActivity, prompt = finalText.value)
+                    // REMOVE this line: Toast.makeText(this@VoiceInputActivity, "Creating draft", Toast.LENGTH_SHORT).show()
+
                     EmailComposeScreen(
                         context = LocalContext.current,
                         onDismiss = {
                             showEmailCompose = false
+                            hasCalledDraft = false // Reset the flag
                             finalText.value = ""
+                            viewModel.clearDraft() // Clear draft state
                             Log.d("VoiceInputActivity", "Email compose dismissed, finalText cleared")
                         },
                         viewModel = viewModel,
@@ -200,10 +217,25 @@ fun EmailComposeScreen(
     var emailBody by remember { mutableStateOf("") }
     val uiState by viewModel.uiState.collectAsState()
 
+    // Track if we've already populated from draft response
+    var hasPopulatedFromDraft by remember { mutableStateOf(false) }
+
     // Initialize fields from initialText
     LaunchedEffect(initialText) {
         val emailMatch = Regex("(?<=send an email to|draft an email to)\\s+([\\w\\.-]+@[\\w\\.-]+)").find(initialText.lowercase())
-        toEmail = emailMatch?.groupValues?.getOrNull(1) ?: "Unknown Recipient"
+        toEmail = emailMatch?.groupValues?.getOrNull(1) ?: ""
+    }
+
+    // Populate fields from draft response when it becomes available
+    LaunchedEffect(uiState.draftResponse) {
+        uiState.draftResponse?.let { draft ->
+            if (!hasPopulatedFromDraft) {
+                toEmail = draft.to
+                subject = draft.subject
+                emailBody = draft.body
+                hasPopulatedFromDraft = true
+            }
+        }
     }
 
     Box(
@@ -220,7 +252,7 @@ fun EmailComposeScreen(
                 .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.9f)
                 .align(Alignment.Center)
-                .padding(bottom = 60.dp, top = 20.dp), // Minimal padding, similar to HeyLisaBar
+                .padding(bottom = 60.dp, top = 20.dp),
             shape = RoundedCornerShape(12.dp),
             color = Color.White
         ) {
@@ -229,12 +261,36 @@ fun EmailComposeScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp)
                     .fillMaxSize()
             ) {
-                // Header Section (Google-like top fields)
+                // Header Section
                 Text(
                     text = "New Message",
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
+
+                // Show loading state while creating draft
+                if (uiState.isLoading && uiState.draftResponse == null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(100.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Generating email draft...",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+
+                // Show error if draft creation failed
+                uiState.error?.let { error ->
+                    Text(
+                        text = "Error: $error",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
 
                 // To Field
                 Text("To", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 4.dp))
@@ -245,6 +301,22 @@ fun EmailComposeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 8.dp)
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline,
+                            RoundedCornerShape(8.dp)
+                        ),
+                    placeholder = { Text("Recipient email") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    textStyle = TextStyle(color = Color.Black)
                 )
 
                 // Subject Field
@@ -256,6 +328,22 @@ fun EmailComposeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 8.dp)
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline,
+                            RoundedCornerShape(8.dp)
+                        ),
+                    placeholder = { Text("Email subject") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    textStyle = TextStyle(color = Color.Black)
                 )
 
                 // Body Field
@@ -268,41 +356,65 @@ fun EmailComposeScreen(
                         .fillMaxWidth()
                         .weight(1f)
                         .padding(bottom = 8.dp)
+                        .border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline,
+                            RoundedCornerShape(8.dp)
+                        ),
+                    placeholder = { Text("Email content") },
+                    maxLines = 10,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    textStyle = TextStyle(color = Color.Black)
                 )
 
-                // Action Buttons (Google-like bottom row)
+                // Show draft info if available
+//                uiState.draftResponse?.let { draft ->
+//                    Text(
+//                        text = "✅ Draft generated successfully (ID: ${draft.draft_id.take(8)}...)",
+//                        modifier = Modifier.padding(vertical = 4.dp),
+//                        style = MaterialTheme.typography.bodySmall,
+//                        color = Color.Green
+//                    )
+//                }
+
+                // Action Buttons
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    Button(onClick = onDismiss) {
+                    Button(onClick = {
+                        viewModel.clearDraft() // Clear the draft state
+                        onDismiss()
+                    }) {
                         Text("Cancel")
                     }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { isEditing = !isEditing }) {
+                    Button(
+                        onClick = { isEditing = !isEditing },
+                        enabled = uiState.draftResponse != null // Only enable when draft is loaded
+                    ) {
                         Text(if (isEditing) "Done" else "Edit")
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = {
-                            viewModel.createDraft(context = context, prompt = "To: $toEmail\nSubject: $subject\n$emailBody")
+                            viewModel.clearDraft()
                             onDismiss()
                         },
-                        enabled = toEmail.isNotEmpty() && emailBody.isNotEmpty()
+                        enabled = toEmail.isNotEmpty() && emailBody.isNotEmpty() && !uiState.isLoading
                     ) {
                         Text("Send")
                     }
-                }
-
-                // Draft Response
-                uiState.draftResponse?.let { draft ->
-                    Text(
-                        text = "Draft Created: ${draft.draft_id}",
-                        modifier = Modifier.padding(top = 8.dp),
-                        style = MaterialTheme.typography.bodySmall
-                    )
                 }
             }
         }
