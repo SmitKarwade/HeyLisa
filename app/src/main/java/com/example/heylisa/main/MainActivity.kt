@@ -89,7 +89,6 @@ class MainActivity : ComponentActivity() {
             isLoggedIn = true
         }
 
-        // Initialize GoogleSignInClient
         googleSignInClient = getGoogleSignInClient(this)
 
         checkAndRequestPermission()
@@ -107,8 +106,8 @@ class MainActivity : ComponentActivity() {
                         showConfirmationDialog = showConfirmationDialog,
                         onDismissDialog = { showConfirmationDialog = false },
                         onStartDownload = { modelDownload(this) },
-                        googleSignInClient = googleSignInClient, // Pass to MainScreen
-                        onSignOut = { signOut() } // Pass sign-out callback
+                        googleSignInClient = googleSignInClient,
+                        onSignOut = { signOut() }
                     )
                 }
             }
@@ -332,8 +331,8 @@ fun MainScreen(
     showConfirmationDialog: Boolean,
     onDismissDialog: () -> Unit,
     onStartDownload: () -> Unit,
-    googleSignInClient: GoogleSignInClient, // Add parameter
-    onSignOut: () -> Unit // Add sign-out callback
+    googleSignInClient: GoogleSignInClient,
+    onSignOut: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         TransparentScaffoldWithToolbar(

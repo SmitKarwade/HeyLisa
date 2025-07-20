@@ -112,7 +112,11 @@ fun getGoogleSignInClient(context: android.content.Context): GoogleSignInClient 
         .requestEmail()
         .requestServerAuthCode("643617418308-66gtgeohdts3fv1844jfu7sf80j4q5sn.apps.googleusercontent.com")
         .requestScopes(
-            Scope("https://www.googleapis.com/auth/gmail.readonly") // Gmail scope
+            Scope("https://www.googleapis.com/auth/gmail.readonly"),
+            Scope("https://www.googleapis.com/auth/userinfo.email"),
+            Scope("https://www.googleapis.com/auth/userinfo.profile"),
+            Scope("https://www.googleapis.com/auth/gmail.send"),
+            Scope("openid")
         )
         .build()
     return GoogleSignIn.getClient(context, gso)
