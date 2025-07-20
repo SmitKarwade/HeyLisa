@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.heylisa.main.MainActivity
+import com.example.heylisa.repository.AuthRepository
 import com.example.heylisa.request.AuthClient
 import com.example.heylisa.request.AuthRequest
 import com.example.heylisa.request.AuthResponse
@@ -17,13 +18,18 @@ import kotlinx.coroutines.launch
 import retrofit2.Call
 import retrofit2.Response
 
-class AuthViewModel : ViewModel() {
+class AuthViewModel(private val authRepository: AuthRepository = AuthRepository()) : ViewModel() {
     data class AuthUiState(
         val isLoading: Boolean = false,
         val error: String? = null,
         val isSignedIn: Boolean = false,
         val email: String? = null
     )
+
+    sealed class AuthResult {
+        data class Success(val accessToken: String) : AuthResult()
+        data class Error(val message: String) : AuthResult()
+    }
 
     private val _uiState = MutableStateFlow(AuthUiState())
     val uiState: StateFlow<AuthUiState> = _uiState
@@ -38,7 +44,25 @@ class AuthViewModel : ViewModel() {
                 val email = account.email
 
                 if (serverAuthCode != null) {
-                    exchangeAuthCodeForToken(context, serverAuthCode, email)
+                    authRepository.exchangeAuthCodeForToken(context, serverAuthCode, email) { result ->
+                        when (result) {
+                            is AuthResult.Success -> {
+                                _uiState.value = _uiState.value.copy(
+                                    isLoading = false,
+                                    isSignedIn = true,
+                                    email = email
+                                )
+                                navigateToMainActivity(context, email)
+                            }
+                            is AuthResult.Error -> {
+                                _uiState.value = _uiState.value.copy(
+                                    isLoading = false,
+                                    error = result.message
+                                )
+                                Log.e("AuthViewModel", "Token exchange failed: ${result.message}")
+                            }
+                        }
+                    }
                 } else {
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -53,49 +77,6 @@ class AuthViewModel : ViewModel() {
                 Log.e("AuthViewModel", "Sign-in failed", e)
             }
         }
-    }
-
-    private fun exchangeAuthCodeForToken(context: Context, authCode: String, email: String?) {
-        val request = AuthRequest(server_auth_code = authCode)
-        val call = AuthClient.authApi.exchangeAuthCodeForToken(request)
-
-        call.enqueue(object : retrofit2.Callback<AuthResponse> {
-            override fun onResponse(call: Call<AuthResponse>, response: Response<AuthResponse>) {
-                if (response.isSuccessful) {
-                    val authResponse = response.body()
-                    val accessToken = authResponse?.access_token
-                    if (accessToken != null) {
-                        Log.d("Access_Token", "Access Token: $accessToken")
-                        _uiState.value = _uiState.value.copy(
-                            isLoading = false,
-                            isSignedIn = true,
-                            email = email
-                        )
-                        navigateToMainActivity(context, email)
-                    } else {
-                        _uiState.value = _uiState.value.copy(
-                            isLoading = false,
-                            error = "Access token not found in response"
-                        )
-                        Log.d("AuthViewModel", "Access Token not found")
-                    }
-                } else {
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        error = "Token exchange failed: ${response.code()} - ${response.errorBody()?.string()}"
-                    )
-                    Log.e("AuthViewModel", "Token exchange failed: ${response.code()}")
-                }
-            }
-
-            override fun onFailure(call: Call<AuthResponse>, t: Throwable) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = "Token exchange failed: ${t.message}"
-                )
-                Log.e("AuthViewModel", "Token exchange failed", t)
-            }
-        })
     }
 
     private fun navigateToMainActivity(context: Context, email: String?) {
