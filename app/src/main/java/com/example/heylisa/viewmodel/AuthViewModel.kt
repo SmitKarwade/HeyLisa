@@ -131,14 +131,33 @@ class AuthViewModel(private val authRepository: AuthRepository = AuthRepository(
         }
     }
 
-    fun getFormattedEmailPreview(): String? {
-        return _uiState.value.draftResponse?.let { draft ->
-            """
-            To: ${draft.to}
-            Subject: ${draft.subject}
-            
-            ${draft.body}
-            """.trimIndent()
+    fun editDraft(context: Context, draftId: String, editPrompt: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+
+            authRepository.editDraft(
+                context = context,
+                draftId = draftId,
+                editPrompt = editPrompt
+            ) { result ->
+                when (result) {
+                    is DraftResult.Success -> {
+                        Log.d("AuthViewModel", "Draft edited successfully")
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            draftResponse = result.draftResponse,
+                            error = null
+                        )
+                    }
+                    is DraftResult.Error -> {
+                        Log.e("AuthViewModel", "Draft edit failed: ${result.message}")
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            error = result.message
+                        )
+                    }
+                }
+            }
         }
     }
 

@@ -9,6 +9,7 @@ import com.example.heylisa.request.AuthRequest
 import com.example.heylisa.request.AuthResponse
 import com.example.heylisa.request.DraftRequest
 import com.example.heylisa.request.DraftResponse
+import com.example.heylisa.request.EditDraftRequest
 import com.example.heylisa.request.InboxResponse
 import retrofit2.Call
 import retrofit2.Callback
@@ -81,6 +82,57 @@ class AuthRepository {
             }
         })
     }
+
+    fun editDraft(
+        context: Context,
+        draftId: String,
+        editPrompt: String,
+        callback: (AuthViewModel.DraftResult) -> Unit
+    ) {
+
+        val request = EditDraftRequest(
+            draft_id = draftId,
+            edit_prompt = editPrompt
+        )
+
+        val call = AuthClient.authApi.editDraft(request)
+
+        Log.d("AuthRepository", "Editing draft with ID: $draftId, command: $editPrompt")
+
+        call.enqueue(object : Callback<DraftResponse> {
+            override fun onResponse(call: Call<DraftResponse>, response: Response<DraftResponse>) {
+                Log.d("AuthRepository", "Edit draft response code: ${response.code()}")
+                if (response.isSuccessful) {
+                    val draftResponse = response.body()
+                    if (draftResponse != null) {
+                        Log.d("AuthRepository", "Draft edited successfully: ${draftResponse.draft_id}")
+                        callback(AuthViewModel.DraftResult.Success(draftResponse))
+                    } else {
+                        val errorMessage = "Draft edit failed: Empty response body"
+                        Log.e("AuthRepository", errorMessage)
+                        callback(AuthViewModel.DraftResult.Error(errorMessage))
+                    }
+                } else {
+                    val errorMessage = try {
+                        val errorBody = response.errorBody()?.string()
+                        Log.e("AuthRepository", "Error body: $errorBody")
+                        "Draft edit failed: ${response.code()} - $errorBody"
+                    } catch (e: Exception) {
+                        "Draft edit failed: ${response.code()} - Unable to read error body"
+                    }
+                    Log.e("AuthRepository", errorMessage)
+                    callback(AuthViewModel.DraftResult.Error(errorMessage))
+                }
+            }
+
+            override fun onFailure(call: Call<DraftResponse>, t: Throwable) {
+                val errorMessage = "Network error while editing draft: ${t.message}"
+                Log.e("AuthRepository", errorMessage, t)
+                callback(AuthViewModel.DraftResult.Error(errorMessage))
+            }
+        })
+    }
+
 
     fun fetchInboxEmails(context: Context, accessToken: String) {
         val authHeader = "Bearer $accessToken"
