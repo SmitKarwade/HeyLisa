@@ -35,9 +35,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.heylisa.auth.AuthViewModel
+
 import com.example.heylisa.constant.Noisy
-import kotlinx.coroutines.delay
+import com.example.heylisa.viewmodel.EmailViewModel
 
 class VoiceInputActivity : ComponentActivity() {
 
@@ -102,7 +102,6 @@ class VoiceInputActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
 
-
         window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
         window.addFlags(
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -124,36 +123,52 @@ class VoiceInputActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            val viewModel: AuthViewModel = viewModel()
+            val emailViewModel: EmailViewModel = viewModel()
             var showEmailCompose by remember { mutableStateOf(false) }
-            var hasCalledDraft by remember { mutableStateOf(false) }
             val currentFinalText = finalText.value
+            val uiState by emailViewModel.uiState.collectAsState()
+
+            LaunchedEffect(uiState.navigationEvent) {
+                uiState.navigationEvent?.let { event ->
+                    when (event) {
+                        EmailViewModel.NavigationEvent.ToComposer -> {
+                            showEmailCompose = true
+                            Log.d("VoiceInputActivity", "Navigating to composer")
+                            Toast.makeText(this@VoiceInputActivity, "Opening composer...", Toast.LENGTH_SHORT).show()
+                        }
+                        EmailViewModel.NavigationEvent.ToInbox -> {
+                            // Could show inbox or navigate elsewhere
+                            Toast.makeText(this@VoiceInputActivity, "Opening inbox...", Toast.LENGTH_SHORT).show()
+                        }
+                        EmailViewModel.NavigationEvent.SendEmail -> {
+                            Toast.makeText(this@VoiceInputActivity, "Email sent!", Toast.LENGTH_LONG).show()
+                            showEmailCompose = false
+                            finalText.value = ""
+                        }
+                        is EmailViewModel.NavigationEvent.ShowError -> {
+                            Toast.makeText(this@VoiceInputActivity, event.message, Toast.LENGTH_LONG).show()
+                        }
+                        else -> {
+                            Log.d("VoiceInputActivity", "Unhandled navigation event: $event")
+                        }
+                    }
+                    emailViewModel.onNavigationHandled()
+                }
+            }
+
 
             LaunchedEffect(currentFinalText) {
-                Log.d(
-                    "VoiceInputActivity",
-                    "LaunchedEffect triggered with text: ${finalText.value}"
-                )
-                val text = finalText.value.lowercase()
-                if (text.isNotEmpty() && (text.contains("send") || text.contains("draft "))) {
-                    if (!showEmailCompose && !hasCalledDraft) {
-                        Log.d(
-                            "VoiceInputActivity",
-                            "Email command detected: $text. Creating draft..."
-                        )
-                        viewModel.handleSpeechResult(currentFinalText)
-                        viewModel.createDraft(
-                            context = this@VoiceInputActivity,
-                            prompt = currentFinalText
-                        )
-                        showEmailCompose = true
-                        hasCalledDraft = true
-                        Toast.makeText(
-                            this@VoiceInputActivity,
-                            "Creating draft",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
+                Log.d("VoiceInputActivity", "LaunchedEffect triggered with text: ${finalText.value}")
+                val text = finalText.value.trim()
+
+                if (text.isNotEmpty()) {
+                    Log.d("VoiceInputActivity", "Processing user input via AI: $text")
+
+                    // Let AI determine what to do with this input
+                    emailViewModel.processUserInput(this@VoiceInputActivity, text)
+
+                    // Clear the final text to prevent re-processing
+                    finalText.value = ""
                 }
             }
 
@@ -183,6 +198,10 @@ class VoiceInputActivity : ComponentActivity() {
                         text = partialText,
                         onMicClick = { },
                         onSendClick = {
+                            // Process the typed text through AI as well
+                            if (partialText.value.isNotEmpty()) {
+                                emailViewModel.processUserInput(this@VoiceInputActivity, partialText.value)
+                            }
                             partialText.value = ""
                         },
                         onTextChange = {
@@ -197,16 +216,10 @@ class VoiceInputActivity : ComponentActivity() {
                         context = LocalContext.current,
                         onDismiss = {
                             showEmailCompose = false
-                            hasCalledDraft = false
-                            finalText.value = ""
-                            viewModel.clearDraft()
-                            Log.d(
-                                "VoiceInputActivity",
-                                "Email compose dismissed, finalText cleared"
-                            )
+                            emailViewModel.clearDraft()
+                            Log.d("VoiceInputActivity", "Email compose dismissed")
                         },
-                        viewModel = viewModel,
-                        initialText = finalText.value
+                        emailViewModel = emailViewModel
                     )
                 }
             }
@@ -217,66 +230,40 @@ class VoiceInputActivity : ComponentActivity() {
     fun EmailComposeScreen(
         context: Context,
         onDismiss: () -> Unit,
-        viewModel: AuthViewModel,
-        initialText: String
+        emailViewModel: EmailViewModel
     ) {
         var isEditing by remember { mutableStateOf(false) }
-        var toEmail by remember { mutableStateOf("") }
-        var subject by remember { mutableStateOf("") }
-        var emailBody by remember { mutableStateOf("") }
-        var currentDraftId by remember { mutableStateOf<String?>(null) }
-        var isVoiceEditing by remember { mutableStateOf(false) }
-        val uiState by viewModel.uiState.collectAsState()
+        val uiState by emailViewModel.uiState.collectAsState()
 
-        // Track if we've already populated from draft response
-        var hasPopulatedFromDraft by remember { mutableStateOf(false) }
+        // Get current draft data
+        val currentDraft = uiState.currentDraft
+        val toEmail = currentDraft?.to ?: ""
+        val subject = currentDraft?.subject ?: ""
+        val emailBody = currentDraft?.body ?: ""
+        val currentDraftId = currentDraft?.draft_id
 
-        // NEW: Listen for edit commands from voice
+        // Handle voice commands for editing
         LaunchedEffect(finalText.value) {
-            val text = finalText.value.lowercase()
-            if (text.isNotEmpty() && currentDraftId != null && !isVoiceEditing) {
-                // Check for edit commands
-                if (text.contains("edit it") || text.contains("change") || text.contains("modify it")) {
-                    Log.d("VoiceInputActivity", "Edit command detected: $text")
-                    isVoiceEditing = true
+            val text = finalText.value.lowercase().trim()
+            if (text.isNotEmpty() && currentDraftId != null) {
+                Log.d("VoiceInputActivity", "Processing voice command in composer: $text")
 
-                    // Send edit request to API
-                    viewModel.editDraft(
-                        context = context,
-                        draftId = currentDraftId!!,
-                        editPrompt = finalText.value
-                    )
+                // Process any voice command through AI
+                emailViewModel.processUserInput(context, text)
 
-                    Toast.makeText(context, "Processing edit command...", Toast.LENGTH_SHORT).show()
-
-                    // Clear the final text to prevent re-triggering
-                    finalText.value = ""
-                }
+                // Clear to prevent re-processing
+                finalText.value = ""
             }
         }
 
-        // Populate fields from draft response when it becomes available
-        LaunchedEffect(uiState.draftResponse) {
-            uiState.draftResponse?.let { draft ->
-                if (!hasPopulatedFromDraft) {
-                    toEmail = draft.to
-                    subject = draft.subject
-                    emailBody = draft.body
-                    currentDraftId = draft.draft_id
-                    hasPopulatedFromDraft = true
-                } else if (isVoiceEditing) {
-                    // Update fields when voice editing response comes back
-                    toEmail = draft.to
-                    subject = draft.subject
-                    emailBody = draft.body
-                    currentDraftId = draft.draft_id
-                    isVoiceEditing = false
-                    Toast.makeText(context, "Email updated via voice command", Toast.LENGTH_SHORT).show()
-                }
+        // Show toast messages based on state changes
+        LaunchedEffect(uiState.error) {
+            uiState.error?.let { error ->
+                Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                emailViewModel.clearError()
             }
         }
 
-        // Rest of your EmailComposeScreen code...
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -301,7 +288,7 @@ class VoiceInputActivity : ComponentActivity() {
                         .padding(16.dp)
                         .fillMaxSize()
                 ) {
-                    // Header Section with Edit and Close Button
+                    // Header Section
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -310,13 +297,13 @@ class VoiceInputActivity : ComponentActivity() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "New Message",
+                            text = "Email Draft",
                             style = MaterialTheme.typography.titleLarge
                         )
 
                         Row {
-                            // Only show manual Edit button
-                            if (currentDraftId != null) {
+                            // Manual Edit Toggle
+                            if (currentDraft != null) {
                                 Button(
                                     onClick = {
                                         isEditing = !isEditing
@@ -329,7 +316,7 @@ class VoiceInputActivity : ComponentActivity() {
                                     enabled = !uiState.isLoading,
                                     modifier = Modifier.padding(end = 8.dp)
                                 ) {
-                                    Text(if (isEditing) "✏️ Done" else "✏️ Edit")
+                                    Text(if (isEditing) "Done" else "Edit")
                                 }
                             }
 
@@ -345,24 +332,22 @@ class VoiceInputActivity : ComponentActivity() {
                         }
                     }
 
-                    // Voice editing status
-                    if (isVoiceEditing) {
-                        Text(
-                            text = "🎤 Processing voice edit command...",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier
-                                .padding(bottom = 8.dp)
-                                .background(
-                                    MaterialTheme.colorScheme.primaryContainer,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .padding(8.dp)
-                        )
-                    }
+                    // Voice command hint
+                    Text(
+                        text = "💡 Say things like: \"Make it shorter\", \"Change subject\", \"Send this email\"",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .padding(bottom = 8.dp)
+                            .background(
+                                MaterialTheme.colorScheme.primaryContainer,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .padding(8.dp)
+                    )
 
                     // Loading state
-                    if (uiState.isLoading && uiState.draftResponse == null) {
+                    if (uiState.isLoading) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -370,28 +355,13 @@ class VoiceInputActivity : ComponentActivity() {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = if (hasPopulatedFromDraft) "Updating email draft..." else "Generating email draft...",
+                                text = if (currentDraft == null) "Generating email draft..." else "Processing your request...",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
                     }
 
-                    // Error display
-                    uiState.error?.let { error ->
-                        Text(
-                            text = "Error: $error",
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier
-                                .padding(bottom = 8.dp)
-                                .background(
-                                    MaterialTheme.colorScheme.errorContainer,
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .padding(8.dp)
-                        )
-                    }
-
-                    // Email form fields
+                    // Email form fields - Now read-only unless manually editing
                     Column(
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -400,8 +370,8 @@ class VoiceInputActivity : ComponentActivity() {
                         EmailField(
                             label = "To",
                             value = toEmail,
-                            onValueChange = { if (isEditing) toEmail = it },
-                            enabled = isEditing,
+                            onValueChange = { /* Manual editing disabled in this version */ },
+                            enabled = false, // Make read-only, voice commands handle changes
                             placeholder = "Recipient email"
                         )
 
@@ -409,13 +379,12 @@ class VoiceInputActivity : ComponentActivity() {
                         EmailField(
                             label = "Subject",
                             value = subject,
-                            onValueChange = { if (isEditing) subject = it },
-                            enabled = isEditing,
+                            onValueChange = { /* Manual editing disabled in this version */ },
+                            enabled = false,
                             placeholder = "Email subject"
                         )
 
-                        // Body Field - Custom scrollable implementation
-                        // Body Field - Better scrollable implementation
+                        // Body Field
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = "Body",
@@ -426,25 +395,22 @@ class VoiceInputActivity : ComponentActivity() {
 
                             OutlinedTextField(
                                 value = emailBody,
-                                onValueChange = { if (isEditing) emailBody = it },
-                                enabled = isEditing,
+                                onValueChange = { /* Manual editing disabled in this version */ },
+                                enabled = false,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .fillMaxHeight(),  // Fill remaining space
+                                    .fillMaxHeight(),
                                 placeholder = {
                                     Text(
-                                        "Email content",
+                                        "Email content will appear here...",
                                         color = Color.Gray
                                     )
                                 },
                                 maxLines = Int.MAX_VALUE,
                                 singleLine = false,
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = Color.Black,
-                                    unfocusedTextColor = Color.Black,
                                     disabledTextColor = Color.Black,
-                                    focusedBorderColor = if (isEditing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                    disabledBorderColor = MaterialTheme.colorScheme.outline
                                 ),
                                 shape = RoundedCornerShape(8.dp),
                                 textStyle = TextStyle(
@@ -454,55 +420,35 @@ class VoiceInputActivity : ComponentActivity() {
                         }
                     }
 
-                    // Action Buttons - Changed second button from Edit to Cancel
+                    // Action Buttons
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                     ) {
-                        // Cancel Button (replaces the second Edit button)
+                        // Cancel Button
                         Button(
-                            onClick = {
-                                if (isEditing) {
-                                    isEditing = false
-                                    Toast.makeText(context, "Editing cancelled", Toast.LENGTH_SHORT)
-                                        .show()
-                                } else {
-                                    onDismiss()
-                                }
-                            }
+                            onClick = onDismiss
                         ) {
-                            Text(if (isEditing) "Cancel Edit" else "Cancel")
+                            Text("Cancel")
                         }
 
+                        // Send Button
                         Button(
                             onClick = {
                                 if (currentDraftId != null) {
-                                    viewModel.confirmSendEmail(
-                                        context = context,
-                                        draftId = currentDraftId!!,
-                                        action = "send"
-                                    )
+                                    emailViewModel.sendEmail(context, currentDraftId)
+                                } else {
+                                    Toast.makeText(context, "No draft to send", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            enabled = toEmail.isNotEmpty() &&
-                                    subject.isNotEmpty() &&
-                                    emailBody.isNotEmpty() &&
-                                    !uiState.isLoading
-                        ) { Text("Send") }
+                            enabled = currentDraft != null && !uiState.isLoading
+                        ) {
+                            Text("Send")
+                        }
                     }
                 }
-            }
-        }
-
-        // Handle voice editing commands
-        if (isVoiceEditing && currentDraftId != null) {
-            LaunchedEffect(isVoiceEditing) {
-                // Auto-disable voice editing after 30 seconds
-                delay(30000)
-                isVoiceEditing = false
-                Toast.makeText(context, "Voice editing timed out", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -559,6 +505,16 @@ class VoiceInputActivity : ComponentActivity() {
                     color = Color.Black
                 )
             )
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(partialReceiver)
+            unregisterReceiver(stateReceiver)
+        } catch (e: IllegalArgumentException) {
+            Log.w("VoiceInputActivity", "Receiver not registered: ${e.message}")
         }
     }
 }

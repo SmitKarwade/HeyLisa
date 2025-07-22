@@ -32,8 +32,7 @@ interface AuthApi {
 
     @POST("gmail/get-intent/")
     fun getIntent(
-        @Body request: String,
-        @Header("Authorization") token: IntentRequest
+        @Body request: IntentRequest
     ): Call<IntentResponse>
 
 }
@@ -49,8 +48,16 @@ data class AuthResponse(
 )
 
 data class InboxResponse(
-    val messages: List<Message>?
-)
+    val messages: List<EmailMessage>
+) {
+    data class EmailMessage(
+        val id: String,
+        val from: String,
+        val subject: String,
+        val body: String
+    )
+}
+
 
 data class Message(
     val id: String,
