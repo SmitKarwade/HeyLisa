@@ -4,9 +4,12 @@ import android.content.Context
 import android.util.Log
 import android.widget.Toast
 import com.example.heylisa.auth.AuthViewModel
+import com.example.heylisa.auth.TokenManager
 import com.example.heylisa.request.AuthClient
 import com.example.heylisa.request.AuthRequest
 import com.example.heylisa.request.AuthResponse
+import com.example.heylisa.request.ConfirmSendRequest
+import com.example.heylisa.request.ConfirmSendResponse
 import com.example.heylisa.request.DraftRequest
 import com.example.heylisa.request.DraftResponse
 import com.example.heylisa.request.EditDraftRequest
@@ -131,6 +134,47 @@ class AuthRepository {
                 callback(AuthViewModel.DraftResult.Error(errorMessage))
             }
         })
+    }
+
+    fun confirmSend(
+        context: Context,
+        draftId: String,
+        action: String,
+        callback: (AuthViewModel.SendResult) -> Unit
+    ) {
+        val token = TokenManager.getToken(context)
+        if (token == null) {
+            callback(AuthViewModel.SendResult.Error("Missing access-token, please sign-in again."))
+            return
+        }
+
+        val request = ConfirmSendRequest(draft_id = draftId, action = action)
+        Log.d("AuthRepository", "▶️ confirmSend payload → $request")
+
+        AuthClient.authApi
+            .confirmSend("Bearer $token", request)
+            .enqueue(object : Callback<ConfirmSendResponse> {
+
+                override fun onResponse(
+                    call: Call<ConfirmSendResponse>,
+                    resp: Response<ConfirmSendResponse>
+                ) {
+                    if (resp.isSuccessful && resp.body() != null) {
+                        callback(AuthViewModel.SendResult.Success(resp.body()!!))
+                    } else {
+                        val err = resp.errorBody()?.string()
+                        callback(
+                            AuthViewModel.SendResult.Error(
+                                "Confirm-send failed: ${resp.code()} – $err"
+                            )
+                        )
+                    }
+                }
+
+                override fun onFailure(call: Call<ConfirmSendResponse>, t: Throwable) {
+                    callback(AuthViewModel.SendResult.Error("Network error: ${t.message}"))
+                }
+            })
     }
 
 

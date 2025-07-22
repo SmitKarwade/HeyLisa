@@ -1,7 +1,8 @@
 package com.example.heylisa.request
 
+import com.example.heylisa.model.IntentRequest
+import com.example.heylisa.model.IntentResponse
 import retrofit2.Call
-import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -22,6 +23,19 @@ interface AuthApi {
 
     @POST("gmail/edit/")
     fun editDraft(@Body request: EditDraftRequest): Call<DraftResponse>
+
+    @POST("gmail/confirm/")
+    fun confirmSend(
+        @Header("Authorization") auth: String,
+        @Body request: ConfirmSendRequest
+    ): Call<ConfirmSendResponse>
+
+    @POST("gmail/get-intent/")
+    fun getIntent(
+        @Body request: String,
+        @Header("Authorization") token: IntentRequest
+    ): Call<IntentResponse>
+
 }
 
 data class AuthRequest(
@@ -60,4 +74,14 @@ data class DraftResponse(
 data class EditDraftRequest(
     val draft_id: String,
     val edit_prompt: String
+)
+
+data class ConfirmSendRequest(
+    val draft_id: String,
+    val action: String
+)
+
+data class ConfirmSendResponse(
+    val message: String,
+    val to: String
 )

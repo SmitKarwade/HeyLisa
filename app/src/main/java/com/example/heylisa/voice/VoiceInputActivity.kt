@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -99,6 +101,7 @@ class VoiceInputActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
+
 
         window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
         window.addFlags(
@@ -411,16 +414,44 @@ class VoiceInputActivity : ComponentActivity() {
                             placeholder = "Email subject"
                         )
 
-                        // Body Field
-                        EmailField(
-                            label = "Body",
-                            value = emailBody,
-                            onValueChange = { if (isEditing) emailBody = it },
-                            enabled = isEditing,
-                            placeholder = "Email content",
-                            modifier = Modifier.weight(1f),
-                            maxLines = 8
-                        )
+                        // Body Field - Custom scrollable implementation
+                        // Body Field - Better scrollable implementation
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Body",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.Black,
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            )
+
+                            OutlinedTextField(
+                                value = emailBody,
+                                onValueChange = { if (isEditing) emailBody = it },
+                                enabled = isEditing,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(),  // Fill remaining space
+                                placeholder = {
+                                    Text(
+                                        "Email content",
+                                        color = Color.Gray
+                                    )
+                                },
+                                maxLines = Int.MAX_VALUE,
+                                singleLine = false,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = Color.Black,
+                                    unfocusedTextColor = Color.Black,
+                                    disabledTextColor = Color.Black,
+                                    focusedBorderColor = if (isEditing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                textStyle = TextStyle(
+                                    color = Color.Black
+                                )
+                            )
+                        }
                     }
 
                     // Action Buttons - Changed second button from Edit to Cancel
@@ -447,15 +478,19 @@ class VoiceInputActivity : ComponentActivity() {
 
                         Button(
                             onClick = {
-                                Toast.makeText(context, "Sending email...", Toast.LENGTH_SHORT)
-                                    .show()
-                                // TODO: Implement actual send functionality
-                                onDismiss()
+                                if (currentDraftId != null) {
+                                    viewModel.confirmSendEmail(
+                                        context = context,
+                                        draftId = currentDraftId!!,
+                                        action = "send"
+                                    )
+                                }
                             },
-                            enabled = toEmail.isNotEmpty() && subject.isNotEmpty() && emailBody.isNotEmpty() && !uiState.isLoading
-                        ) {
-                            Text("Send")
-                        }
+                            enabled = toEmail.isNotEmpty() &&
+                                    subject.isNotEmpty() &&
+                                    emailBody.isNotEmpty() &&
+                                    !uiState.isLoading
+                        ) { Text("Send") }
                     }
                 }
             }

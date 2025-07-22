@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.heylisa.main.MainActivity
 import com.example.heylisa.repository.AuthRepository
+import com.example.heylisa.request.ConfirmSendResponse
 import com.example.heylisa.request.DraftResponse
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
@@ -35,6 +36,11 @@ class AuthViewModel(private val authRepository: AuthRepository = AuthRepository(
     sealed class DraftResult {
         data class Success(val draftResponse: DraftResponse) : DraftResult()
         data class Error(val message: String) : DraftResult()
+    }
+
+    sealed class SendResult {
+        data class Success(val data: ConfirmSendResponse) : SendResult()
+        data class Error(val msg: String)                 : SendResult()
     }
 
     private val _uiState = MutableStateFlow(AuthUiState())
@@ -155,6 +161,30 @@ class AuthViewModel(private val authRepository: AuthRepository = AuthRepository(
                             isLoading = false,
                             error = result.message
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    fun confirmSendEmail(context: Context, draftId: String, action: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+
+            authRepository.confirmSend(context, draftId, action) { result ->
+                when (result) {
+                    is SendResult.Success -> {
+                        _uiState.value = _uiState.value.copy(isLoading = false)
+                        Toast.makeText(
+                            context,
+                            result.data.message,
+                            Toast.LENGTH_LONG
+                        ).show()
+                        if (action == "send") clearDraft()
+                    }
+                    is SendResult.Error -> {
+                        _uiState.value =
+                            _uiState.value.copy(isLoading = false, error = result.msg)
                     }
                 }
             }

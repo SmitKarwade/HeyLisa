@@ -1,10 +1,6 @@
 package com.example.heylisa.auth
 
-import android.content.Context
-import android.content.Intent
-import android.util.Log
 import android.widget.Toast
-import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -21,18 +17,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.heylisa.main.MainActivity
-import com.example.heylisa.request.AuthClient
-import com.example.heylisa.request.AuthRequest
-import com.example.heylisa.request.AuthResponse
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
-import retrofit2.Call
-import retrofit2.Response
-import javax.security.auth.callback.Callback
 
 @Composable
 fun App(viewModel: AuthViewModel = viewModel()) {
