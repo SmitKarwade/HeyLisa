@@ -17,29 +17,18 @@ class EmailViewModel(
     private val emailRepository: EmailRepository = EmailRepository()
 ) : ViewModel() {
 
-    // UI State
     data class EmailUiState(
         val isLoading: Boolean = false,
         val error: String? = null,
         val currentScreen: String = "home",
-
-        // Intent & Navigation
         val lastIntent: IntentResponse? = null,
         val navigationEvent: NavigationEvent? = null,
-
-        // Email Draft
         val currentDraft: DraftResponse? = null,
         val isDraftCreated: Boolean = false,
-
-        // Speech Recognition
         val isSpeechActive: Boolean = false,
-        val lastSpeechResult: String? = null,
-
-        // Inbox
-        //val inboxEmails: List<InboxResponse.EmailMessage> = emptyList()
+        val lastSpeechResult: String? = null
     )
 
-    // Result Classes
     sealed class IntentResult {
         data class Success(val intentResponse: IntentResponse) : IntentResult()
         data class Error(val message: String) : IntentResult()
@@ -60,7 +49,6 @@ class EmailViewModel(
         data class Error(val message: String) : InboxResult()
     }
 
-    // Navigation Events
     sealed class NavigationEvent {
         object ToComposer : NavigationEvent()
         object ToInbox : NavigationEvent()
@@ -68,36 +56,39 @@ class EmailViewModel(
         object ToSent : NavigationEvent()
         object ToChat : NavigationEvent()
         object SendEmail : NavigationEvent()
-        object ShowSchedulePicker : NavigationEvent()
         data class ShowError(val message: String) : NavigationEvent()
+        data class ShowSuccess(val message: String) : NavigationEvent()
     }
 
     private val _uiState = MutableStateFlow(EmailUiState())
     val uiState: StateFlow<EmailUiState> = _uiState
 
-    // Main function to process user input
     fun processUserInput(context: Context, input: String) {
+        val cleanInput = input.trim()
+        if (cleanInput.isEmpty()) return
+
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
                 error = null,
-                lastSpeechResult = input
+                lastSpeechResult = cleanInput
             )
 
-            // Get intent from AI
+            Log.d("EmailViewModel", "Processing input: '$cleanInput'")
+
             emailRepository.getIntent(
                 context = context,
-                userInput = input,
+                userInput = cleanInput,
                 currentScreen = _uiState.value.currentScreen
             ) { result ->
                 when (result) {
                     is IntentResult.Success -> {
-                        handleIntentResponse(context, result.intentResponse, input)
+                        handleIntentResponse(context, result.intentResponse, cleanInput)
                     }
                     is IntentResult.Error -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            error = result.message
+                            navigationEvent = NavigationEvent.ShowError("Failed to understand: ${result.message}")
                         )
                     }
                 }
@@ -111,64 +102,125 @@ class EmailViewModel(
             isLoading = false
         )
 
+        Log.d("EmailViewModel", """
+            Intent Response:
+            - Intent: ${intentResponse.intent}
+            - Confidence: ${intentResponse.confidence}
+            - Navigation: ${intentResponse.navigation_instruction}
+            - Action: ${intentResponse.suggested_action}
+            - Recipient Mentioned: ${intentResponse.recipient_mentioned}
+        """.trimIndent())
+
+        // Handle based on navigation instruction first for simplicity
+        when (intentResponse.navigation_instruction) {
+            "stay_and_edit" -> {
+                handleEditIntent(context, originalInput)
+            }
+            "send_current_draft" -> {
+                handleSendIntent(context)
+            }
+            "navigate_to_composer" -> {
+                handleComposeIntent(context, originalInput)
+            }
+            "show_chat_interface" -> {
+                handleOtherIntent(context, intentResponse, originalInput)
+            }
+            else -> {
+                when (intentResponse.intent) {
+                    "compose" -> handleComposeIntent(context, originalInput)
+                    "edit" -> handleEditIntent(context, originalInput)
+                    "send" -> handleSendIntent(context)
+                    "other" -> handleOtherIntent(context, intentResponse, originalInput)
+                    else -> {
+                        _uiState.value = _uiState.value.copy(
+                            navigationEvent = NavigationEvent.ShowError("Unknown intent: ${intentResponse.intent}")
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleComposeIntent(context: Context, input: String) {
+        Log.d("EmailViewModel", "Handling compose intent")
+        navigateToComposer()
+        createDraft(context, input)
+    }
+
+    private fun handleEditIntent(context: Context, input: String) {
+        Log.d("EmailViewModel", "Handling edit intent")
+        val currentDraft = _uiState.value.currentDraft
+
+        if (currentDraft?.draft_id != null) {
+            editDraft(context, currentDraft.draft_id, input)
+        } else {
+            _uiState.value = _uiState.value.copy(
+                navigationEvent = NavigationEvent.ShowError(
+                    "No draft available to edit. Create a draft first by saying 'write email to [person]'"
+                )
+            )
+        }
+    }
+
+    private fun handleSendIntent(context: Context) {
+        Log.d("EmailViewModel", "Handling send intent")
+        val currentDraft = _uiState.value.currentDraft
+
+        if (currentDraft?.draft_id != null) {
+            // Validate draft has required content
+            if (currentDraft.to.isNullOrBlank() || currentDraft.body.isNullOrBlank()) {
+                _uiState.value = _uiState.value.copy(
+                    navigationEvent = NavigationEvent.ShowError(
+                        "Draft is incomplete. Please add recipient and content before sending."
+                    )
+                )
+                return
+            }
+            sendEmail(context, currentDraft.draft_id)
+        } else {
+            _uiState.value = _uiState.value.copy(
+                navigationEvent = NavigationEvent.ShowError(
+                    "No draft available to send. Create a draft first."
+                )
+            )
+        }
+    }
+
+    private fun handleOtherIntent(context: Context, intentResponse: IntentResponse, originalInput: String) {
+        Log.d("EmailViewModel", "Handling other intent")
+
+        // Check for navigation instructions
         when (intentResponse.navigation_instruction) {
             "navigate_to_composer" -> {
                 navigateToComposer()
-                if (intentResponse.intent == "compose") {
-                    createDraft(context, originalInput)
-                }
+                createDraft(context, originalInput)
             }
-
-            "navigate_to_inbox" -> {
-                navigateToInbox(context)
+            "navigate_to_draft_editor" -> {
+                handleEditIntent(context, originalInput)
             }
-
-            "navigate_to_drafts" -> {
-                navigateToDrafts()
+            "send_current_email" -> {
+                handleSendIntent(context)
             }
-
-            "stay_and_edit" -> {
-                val currentDraft = _uiState.value.currentDraft
-                if (currentDraft?.draft_id != null) {
-                    editDraft(context, currentDraft.draft_id, originalInput)
-                } else {
-                    _uiState.value = _uiState.value.copy(
-                        error = "No draft available to edit"
-                    )
-                }
-            }
-
-            "send_current_draft" -> {
-                val currentDraft = _uiState.value.currentDraft
-                if (currentDraft?.draft_id != null) {
-                    sendEmail(context, currentDraft.draft_id)
-                } else {
-                    _uiState.value = _uiState.value.copy(
-                        error = "No draft available to send"
-                    )
-                }
-            }
-
-            "save_and_go_to_drafts" -> {
-                // Draft is already saved, just navigate
-                navigateToDrafts()
-            }
-
-            "show_schedule_picker" -> {
-                _uiState.value = _uiState.value.copy(
-                    navigationEvent = NavigationEvent.ShowSchedulePicker
-                )
-            }
-
             "show_chat_interface" -> {
-                _uiState.value = _uiState.value.copy(
-                    navigationEvent = NavigationEvent.ToChat
-                )
+                // Final check if this might be an email-related query
+                val lowerInput = originalInput.lowercase()
+                if ((lowerInput.contains("email") || lowerInput.contains("mail")) &&
+                    (lowerInput.contains("send") || lowerInput.contains("write") || lowerInput.contains("draft"))) {
+                    Log.d("EmailViewModel", "Chat interface but detected email intent - creating draft")
+                    navigateToComposer()
+                    createDraft(context, originalInput)
+                } else {
+                    // Handle as general query
+                    _uiState.value = _uiState.value.copy(
+                        navigationEvent = NavigationEvent.ToChat
+                    )
+                }
             }
-
             else -> {
                 _uiState.value = _uiState.value.copy(
-                    error = intentResponse.suggested_action
+                    navigationEvent = NavigationEvent.ShowError(
+                        intentResponse.suggested_action ?: "I didn't understand that command."
+                    )
                 )
             }
         }
@@ -208,14 +260,15 @@ class EmailViewModel(
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
                             currentDraft = result.draftResponse,
-                            isDraftCreated = true
+                            isDraftCreated = true,
+                            navigationEvent = NavigationEvent.ShowSuccess("Email draft created successfully!")
                         )
-                        Log.d("EmailViewModel", "Draft created successfully")
+                        Log.d("EmailViewModel", "Draft created: ${result.draftResponse.draft_id}")
                     }
                     is DraftResult.Error -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            error = result.message
+                            navigationEvent = NavigationEvent.ShowError("Failed to create draft: ${result.message}")
                         )
                         Log.e("EmailViewModel", "Draft creation failed: ${result.message}")
                     }
@@ -234,14 +287,14 @@ class EmailViewModel(
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
                             currentDraft = result.draftResponse,
-                            error = null
+                            navigationEvent = NavigationEvent.ShowSuccess("Draft updated successfully!")
                         )
-                        Log.d("EmailViewModel", "Draft edited successfully")
+                        Log.d("EmailViewModel", "Draft edited: ${result.draftResponse.draft_id}")
                     }
                     is DraftResult.Error -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            error = result.message
+                            navigationEvent = NavigationEvent.ShowError("Failed to edit draft: ${result.message}")
                         )
                         Log.e("EmailViewModel", "Draft edit failed: ${result.message}")
                     }
@@ -260,14 +313,15 @@ class EmailViewModel(
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
                             navigationEvent = NavigationEvent.SendEmail,
-                            currentDraft = null // Clear draft after sending
+                            currentDraft = null,
+                            isDraftCreated = false
                         )
                         Log.d("EmailViewModel", "Email sent successfully")
                     }
                     is SendResult.Error -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            error = result.message
+                            navigationEvent = NavigationEvent.ShowError("Failed to send email: ${result.message}")
                         )
                         Log.e("EmailViewModel", "Email send failed: ${result.message}")
                     }
@@ -281,14 +335,11 @@ class EmailViewModel(
             emailRepository.fetchInboxEmails(context) { result ->
                 when (result) {
                     is InboxResult.Success -> {
-                        _uiState.value = _uiState.value.copy(
-                            //inboxEmails = result.inboxResponse.messages
-                        )
-                        //Log.d("EmailViewModel", "Inbox loaded: ${result.inboxResponse.messages.size} emails")
+                        Log.d("EmailViewModel", "Inbox loaded successfully")
                     }
                     is InboxResult.Error -> {
                         _uiState.value = _uiState.value.copy(
-                            error = result.message
+                            navigationEvent = NavigationEvent.ShowError("Failed to load inbox: ${result.message}")
                         )
                         Log.e("EmailViewModel", "Inbox fetch failed: ${result.message}")
                     }
@@ -297,12 +348,11 @@ class EmailViewModel(
         }
     }
 
-    // Speech Recognition
+    // Utility Functions
     fun setSpeechActive(active: Boolean) {
         _uiState.value = _uiState.value.copy(isSpeechActive = active)
     }
 
-    // Utility Functions
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
     }
@@ -318,7 +368,7 @@ class EmailViewModel(
         _uiState.value = _uiState.value.copy(navigationEvent = null)
     }
 
-    // Getters for easy access
+    // Getters
     fun getDraftTo(): String? = _uiState.value.currentDraft?.to
     fun getDraftSubject(): String? = _uiState.value.currentDraft?.subject
     fun getDraftBody(): String? = _uiState.value.currentDraft?.body

@@ -26,12 +26,6 @@ class EmailRepository {
         currentScreen: String,
         callback: (EmailViewModel.IntentResult) -> Unit
     ) {
-        val token = TokenManager.getToken(context)
-        if (token == null) {
-            callback(EmailViewModel.IntentResult.Error("No access token available"))
-            return
-        }
-
         val request = IntentRequest(
             user_input = userInput,
             current_screen = currentScreen
@@ -104,7 +98,7 @@ class EmailRepository {
         })
     }
 
-    // Edit Draft
+    // Edit Draft - FIXED VERSION
     fun editDraft(
         context: Context,
         draftId: String,
@@ -116,6 +110,8 @@ class EmailRepository {
             edit_prompt = editPrompt
         )
 
+        Log.d("EmailRepository", "Editing draft: $draftId with prompt: '$editPrompt'")
+
         val call = AuthClient.authApi.editDraft(request)
 
         call.enqueue(object : Callback<DraftResponse> {
@@ -123,25 +119,28 @@ class EmailRepository {
                 if (response.isSuccessful) {
                     val draftResponse = response.body()
                     if (draftResponse != null) {
-                        Log.d("EmailRepository", "Draft edited: ${draftResponse.draft_id}")
+                        Log.d("EmailRepository", "Draft edited successfully: ${draftResponse.draft_id}")
+                        Log.d("EmailRepository", "Updated content - To: ${draftResponse.to}, Subject: ${draftResponse.subject}")
                         callback(EmailViewModel.DraftResult.Success(draftResponse))
                     } else {
                         callback(EmailViewModel.DraftResult.Error("Empty edit response"))
                     }
                 } else {
-                    val errorMessage = "Draft edit failed: ${response.code()}"
-                    Log.e("EmailRepository", errorMessage)
+                    val errorBody = response.errorBody()?.string()
+                    val errorMessage = "Draft edit failed: ${response.code()} - ${response.message()}"
+                    Log.e("EmailRepository", "$errorMessage\nError body: $errorBody")
                     callback(EmailViewModel.DraftResult.Error(errorMessage))
                 }
             }
 
             override fun onFailure(call: Call<DraftResponse>, t: Throwable) {
-                val errorMessage = "Network error: ${t.message}"
+                val errorMessage = "Network error during edit: ${t.message}"
                 Log.e("EmailRepository", errorMessage, t)
                 callback(EmailViewModel.DraftResult.Error(errorMessage))
             }
         })
     }
+
 
     // Send Email
     fun confirmSend(
