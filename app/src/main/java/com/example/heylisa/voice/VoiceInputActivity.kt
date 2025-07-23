@@ -310,7 +310,7 @@ class VoiceInputActivity : ComponentActivity() {
                     Spacer(modifier = Modifier.height(16.dp))
 
                     // Voice command hint
-                    VoiceCommandHint()
+                    //VoiceCommandHint()
 
                     Spacer(modifier = Modifier.height(16.dp))
 
