@@ -71,12 +71,14 @@ data class DraftRequest(
 )
 
 data class DraftResponse(
-    val draft_id: String,
-    val to: String,
-    val subject: String,
-    val body: String,
-    val raw_input: String
+    val draft_id: String?,
+    val to: String?,
+    val subject: String?,
+    val body: String?,
+    val raw_input: String?,
+    val edit_summary: String? = null
 )
+
 
 data class EditDraftRequest(
     val draft_id: String,

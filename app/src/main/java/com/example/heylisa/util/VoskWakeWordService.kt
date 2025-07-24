@@ -391,7 +391,7 @@ class VoskWakeWordService : Service() {
                 }
 
                 val buffer = ByteArray(bufferSize)
-                val maxSessionTime = 20000L // 60 seconds max
+                val maxSessionTime = 60000L // 60 seconds max
                 val meaningfulSilenceTimeout = 8000L // 8 seconds of meaningful silence to end session
                 val processTimeout = 3000L // 3 seconds to process current speech
 

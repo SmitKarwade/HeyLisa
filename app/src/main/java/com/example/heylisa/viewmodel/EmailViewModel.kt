@@ -22,6 +22,7 @@ class EmailViewModel(
     private val emailRepository: EmailRepository = EmailRepository()
 ) : ViewModel() {
 
+    private var isFirstDraftCreation = true
     private val ttsService: TtsService
 
     private val ttsStateReceiver = object : BroadcastReceiver() {
@@ -298,10 +299,8 @@ class EmailViewModel(
         )
     }
 
-    // Modified createDraft with proper service integration
     fun createDraft(context: Context, prompt: String) {
         viewModelScope.launch {
-            // Notify service that processing is starting IMMEDIATELY
             notifyProcessingStarted()
 
             _uiState.value = _uiState.value.copy(
@@ -323,10 +322,18 @@ class EmailViewModel(
                         )
 
                         Log.d("EmailViewModel", "✅ Draft created successfully: ${result.draftResponse.draft_id}")
-                        speak(result.draftResponse.body ?: "Draft created successfully")
+
+                        // ✅ For new drafts, speak the full body
+                        val textToSpeak = if (!result.draftResponse.body.isNullOrBlank()) {
+                            "Here's your email: ${result.draftResponse.body}"
+                        } else {
+                            "Draft created successfully"
+                        }
+
+                        speak(textToSpeak)
+                        isFirstDraftCreation = false
 
                         // Processing complete will be sent after TTS finishes
-                        // Don't call notifyProcessingComplete() here
                     }
                     is DraftResult.Error -> {
                         val errorMessage = "Failed to create draft: ${result.message}"
@@ -338,19 +345,14 @@ class EmailViewModel(
 
                         speak(errorMessage)
                         Log.e("EmailViewModel", "❌ Draft creation failed: ${result.message}")
-
-                        // Processing complete will be sent after TTS finishes
-                        // Don't call notifyProcessingComplete() here
                     }
                 }
             }
         }
     }
 
-    // Modified editDraft with proper service integration
     fun editDraft(context: Context, draftId: String, editPrompt: String) {
         viewModelScope.launch {
-            // Notify service that processing is starting IMMEDIATELY
             notifyProcessingStarted()
 
             _uiState.value = _uiState.value.copy(
@@ -370,11 +372,18 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowSuccess("Draft updated successfully!")
                         )
 
-                        speak(result.draftResponse.body ?: "Draft updated successfully")
+                        // ✅ Smart TTS: Speak edit summary instead of full body
+                        val textToSpeak = if (!result.draftResponse.edit_summary.isNullOrBlank()) {
+                            result.draftResponse.edit_summary
+                        } else {
+                            "Draft updated successfully"
+                        }
+
+                        speak(textToSpeak)
                         Log.d("EmailViewModel", "✅ Draft edited successfully: ${result.draftResponse.draft_id}")
+                        Log.d("EmailViewModel", "🗣️ Speaking edit summary: $textToSpeak")
 
                         // Processing complete will be sent after TTS finishes
-                        // Don't call notifyProcessingComplete() here
                     }
                     is DraftResult.Error -> {
                         val errorMessage = "Failed to edit draft: ${result.message}"
@@ -386,9 +395,6 @@ class EmailViewModel(
 
                         speak(errorMessage)
                         Log.e("EmailViewModel", "❌ Draft edit failed: ${result.message}")
-
-                        // Processing complete will be sent after TTS finishes
-                        // Don't call notifyProcessingComplete() here
                     }
                 }
             }
