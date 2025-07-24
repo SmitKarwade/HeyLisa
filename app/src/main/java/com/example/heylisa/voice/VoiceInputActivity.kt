@@ -209,9 +209,9 @@ class VoiceInputActivity : ComponentActivity() {
 
             // TTS Speaking Indicator
             if (isTtsSpeaking.value) {
-                TtsSpeakingIndicator(
-                    modifier = Modifier.align(Alignment.TopCenter)
-                )
+//                TtsSpeakingIndicator(
+//                    modifier = Modifier.align(Alignment.TopCenter)
+//                )
             }
         }
     }
@@ -468,11 +468,11 @@ class VoiceInputActivity : ComponentActivity() {
             )
 
             // Subject Field
-            EmailDisplayField(
-                label = "Subject",
-                value = draft.subject ?: "",
-                placeholder = "Subject will appear here"
-            )
+//            EmailDisplayField(
+//                label = "Subject",
+//                value = draft.subject ?: "",
+//                placeholder = "Subject will appear here"
+//            )
 
             // Body Field with scroll
             Column(modifier = Modifier.weight(1f)) {
@@ -488,7 +488,7 @@ class VoiceInputActivity : ComponentActivity() {
                         .fillMaxWidth()
                         .fillMaxHeight(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
+                        containerColor = Color.White
                     ),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
@@ -499,28 +499,25 @@ class VoiceInputActivity : ComponentActivity() {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(12.dp)
+                            .padding(12.dp),
+                        contentAlignment = Alignment.Center // ✅ Add contentAlignment here
                     ) {
                         if (isLoading && draft.body.isNullOrBlank()) {
-                            // Show loading in body area
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
+                            // Show loading in body area - Remove the inner Box
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center // ✅ Add vertical centering
                             ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(24.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "Generating content...",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                    )
-                                }
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Generating content...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
                             }
                         } else {
                             // Scrollable text content
