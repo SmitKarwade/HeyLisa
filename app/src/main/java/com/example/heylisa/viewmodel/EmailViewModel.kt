@@ -9,13 +9,35 @@ import com.example.heylisa.repository.EmailRepository
 import com.example.heylisa.request.ConfirmSendResponse
 import com.example.heylisa.request.DraftResponse
 import com.example.heylisa.request.InboxResponse
+import com.example.heylisa.service.TtsService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class EmailViewModel(
+    private val context: Context,
     private val emailRepository: EmailRepository = EmailRepository()
 ) : ViewModel() {
+
+    private val ttsService: TtsService
+
+    init {
+        ttsService = TtsService(context.applicationContext) {
+            Log.d("EmailViewModel", "TTS Service is ready from ViewModel.")
+            // You could optionally speak a welcome message here
+        }
+    }
+
+    private fun speak(text: String) {
+        // This helper centralizes the call to the ttsService
+        ttsService.speak(text)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        ttsService.shutdown()
+        Log.d("EmailViewModel", "ViewModel cleared, TTS shutdown.")
+    }
 
     data class EmailUiState(
         val isLoading: Boolean = false,
@@ -86,10 +108,12 @@ class EmailViewModel(
                         handleIntentResponse(context, result.intentResponse, cleanInput)
                     }
                     is IntentResult.Error -> {
+                        val errorMessage = "Failed to understand: ${result.message}"
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            navigationEvent = NavigationEvent.ShowError("Failed to understand: ${result.message}")
+                            navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
+                        speak(errorMessage)
                     }
                 }
             }
@@ -264,12 +288,15 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowSuccess("Email draft created successfully!")
                         )
                         Log.d("EmailViewModel", "Draft created: ${result.draftResponse.draft_id}")
+                        speak(result.draftResponse.body)
                     }
                     is DraftResult.Error -> {
+                        val errorMessage = "Failed to create draft: ${result.message}"
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            navigationEvent = NavigationEvent.ShowError("Failed to create draft: ${result.message}")
+                            navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
+                        speak(errorMessage)
                         Log.e("EmailViewModel", "Draft creation failed: ${result.message}")
                     }
                 }
@@ -289,6 +316,7 @@ class EmailViewModel(
                             currentDraft = result.draftResponse,
                             navigationEvent = NavigationEvent.ShowSuccess("Draft updated successfully!")
                         )
+                        speak(result.draftResponse.body)
                         Log.d("EmailViewModel", "Draft edited: ${result.draftResponse.draft_id}")
                     }
                     is DraftResult.Error -> {
@@ -296,6 +324,7 @@ class EmailViewModel(
                             isLoading = false,
                             navigationEvent = NavigationEvent.ShowError("Failed to edit draft: ${result.message}")
                         )
+                        speak("Failed to edit draft: ${result.message}")
                         Log.e("EmailViewModel", "Draft edit failed: ${result.message}")
                     }
                 }
@@ -323,6 +352,7 @@ class EmailViewModel(
                             isLoading = false,
                             navigationEvent = NavigationEvent.ShowError("Failed to send email: ${result.message}")
                         )
+                        speak("Failed to send email: ${result.message}")
                         Log.e("EmailViewModel", "Email send failed: ${result.message}")
                     }
                 }

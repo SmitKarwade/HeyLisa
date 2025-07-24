@@ -29,6 +29,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.heylisa.constant.Noisy
 import com.example.heylisa.viewmodel.EmailViewModel
@@ -87,6 +89,17 @@ class VoiceInputActivity : ComponentActivity() {
         }
     }
 
+    class EmailViewModelFactory(private val context: Context) : ViewModelProvider.Factory {
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(EmailViewModel::class.java)) {
+                @Suppress("UNCHECKED_CAST")
+                // Pass the context to the ViewModel's constructor
+                return EmailViewModel(context) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class")
+        }
+    }
+
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -127,7 +140,10 @@ class VoiceInputActivity : ComponentActivity() {
 
     @Composable
     fun VoiceInputScreen() {
-        val emailViewModel: EmailViewModel = viewModel()
+        val context = LocalContext.current
+        val emailViewModel: EmailViewModel = viewModel(
+            factory = EmailViewModelFactory(context.applicationContext)
+        )
         var showEmailCompose by remember { mutableStateOf(false) }
         val uiState by emailViewModel.uiState.collectAsState()
 
