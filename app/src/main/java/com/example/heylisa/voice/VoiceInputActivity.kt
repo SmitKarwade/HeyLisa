@@ -42,6 +42,9 @@ class VoiceInputActivity : ComponentActivity() {
     private val partialText = mutableStateOf("")
     private val finalText = mutableStateOf("")
 
+    // Add TTS state tracking
+    private val isTtsSpeaking = mutableStateOf(false)
+
     private val partialReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -70,20 +73,31 @@ class VoiceInputActivity : ComponentActivity() {
 
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "com.example.heylisa.STATE_UPDATE") {
-                val state = intent.getStringExtra("state") ?: return
-                when (state) {
-                    "wake_word_detected" -> {
-                        Log.d("VoiceInputActivity", "Wake word detected")
+            when (intent?.action) {
+                "com.example.heylisa.STATE_UPDATE" -> {
+                    val state = intent.getStringExtra("state") ?: return
+                    when (state) {
+                        "wake_word_detected" -> {
+                            Log.d("VoiceInputActivity", "Wake word detected")
+                        }
+                        "speech_recognition_started" -> {
+                            isListening.value = true
+                            Log.d("VoiceInputActivity", "Speech recognition started")
+                        }
+                        "wake_word_listening" -> {
+                            isListening.value = false
+                            Log.d("VoiceInputActivity", "Back to wake word listening")
+                        }
                     }
-                    "speech_recognition_started" -> {
-                        isListening.value = true
-                        Log.d("VoiceInputActivity", "Speech recognition started")
-                    }
-                    "wake_word_listening" -> {
-                        isListening.value = false
-                        Log.d("VoiceInputActivity", "Back to wake word listening")
-                    }
+                }
+                // Add TTS state handling
+                "com.example.heylisa.TTS_STARTED" -> {
+                    isTtsSpeaking.value = true
+                    Log.d("VoiceInputActivity", "TTS started speaking")
+                }
+                "com.example.heylisa.TTS_FINISHED", "com.example.heylisa.TTS_ERROR" -> {
+                    isTtsSpeaking.value = false
+                    Log.d("VoiceInputActivity", "TTS finished speaking")
                 }
             }
         }
@@ -93,7 +107,6 @@ class VoiceInputActivity : ComponentActivity() {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             if (modelClass.isAssignableFrom(EmailViewModel::class.java)) {
                 @Suppress("UNCHECKED_CAST")
-                // Pass the context to the ViewModel's constructor
                 return EmailViewModel(context) as T
             }
             throw IllegalArgumentException("Unknown ViewModel class")
@@ -113,18 +126,6 @@ class VoiceInputActivity : ComponentActivity() {
         }
     }
 
-    private fun setupWindow() {
-        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
-        window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-        )
-    }
-
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun registerBroadcastReceivers() {
         val partialFilter = IntentFilter().apply {
@@ -134,7 +135,13 @@ class VoiceInputActivity : ComponentActivity() {
         }
         registerReceiver(partialReceiver, partialFilter, RECEIVER_EXPORTED)
 
-        val stateFilter = IntentFilter("com.example.heylisa.STATE_UPDATE")
+        val stateFilter = IntentFilter().apply {
+            addAction("com.example.heylisa.STATE_UPDATE")
+            // Add TTS state actions
+            addAction("com.example.heylisa.TTS_STARTED")
+            addAction("com.example.heylisa.TTS_FINISHED")
+            addAction("com.example.heylisa.TTS_ERROR")
+        }
         registerReceiver(stateReceiver, stateFilter, RECEIVER_EXPORTED)
     }
 
@@ -157,10 +164,10 @@ class VoiceInputActivity : ComponentActivity() {
             }
         }
 
-        // Process voice input
-        LaunchedEffect(finalText.value) {
+        // Process voice input - MODIFIED to only process when not TTS speaking
+        LaunchedEffect(finalText.value, isTtsSpeaking.value) {
             val text = finalText.value.trim()
-            if (text.isNotEmpty()) {
+            if (text.isNotEmpty() && !isTtsSpeaking.value) {
                 Log.d("VoiceInputActivity", "Processing voice input: '$text'")
                 emailViewModel.processUserInput(this@VoiceInputActivity, text)
                 finalText.value = "" // Clear to prevent reprocessing
@@ -199,6 +206,45 @@ class VoiceInputActivity : ComponentActivity() {
             if (uiState.isLoading && !showEmailCompose) {
                 LoadingOverlay()
             }
+
+            // TTS Speaking Indicator
+            if (isTtsSpeaking.value) {
+                TtsSpeakingIndicator(
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+            }
+        }
+    }
+
+    // Add TTS speaking indicator
+    @Composable
+    fun TtsSpeakingIndicator(modifier: Modifier = Modifier) {
+        Card(
+            modifier = modifier
+                .padding(16.dp)
+                .fillMaxWidth(0.8f),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Lisa is speaking...",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
     }
 
@@ -217,42 +263,14 @@ class VoiceInputActivity : ComponentActivity() {
                 text = partialText,
                 onMicClick = { /* Mic functionality handled by broadcast receiver */ },
                 onSendClick = {
-                    if (partialText.value.isNotEmpty()) {
+                    if (partialText.value.isNotEmpty() && !isTtsSpeaking.value) {
                         emailViewModel.processUserInput(this@VoiceInputActivity, partialText.value)
                         partialText.value = ""
                     }
                 },
                 onTextChange = { partialText.value = it },
-                isListening = isListening.value
+                isListening = isListening.value && !isTtsSpeaking.value // Modify listening state
             )
-        }
-    }
-
-    @Composable
-    fun LoadingOverlay() {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.5f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Card(
-                modifier = Modifier.padding(32.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator()
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Processing your request...",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
         }
     }
 
@@ -265,20 +283,14 @@ class VoiceInputActivity : ComponentActivity() {
         val uiState by emailViewModel.uiState.collectAsState()
         val currentDraft = uiState.currentDraft
 
-        // Handle voice commands in composer - FIXED to avoid mis-triggering send
-        LaunchedEffect(finalText.value) {
+        // Handle voice commands in composer - MODIFIED to respect TTS state
+        LaunchedEffect(finalText.value, isTtsSpeaking.value) {
             val text = finalText.value.trim()
-            if (text.isNotEmpty() && currentDraft != null) {
+            if (text.isNotEmpty() && currentDraft != null && !isTtsSpeaking.value) {
                 Log.d("VoiceInputActivity", "Processing voice command in composer: '$text'")
-                // Process only if not a send command while editing
-                if (!text.lowercase().contains("send")) {
-                    emailViewModel.processUserInput(context, text)
-                } else {
-                    // Handle send explicitly
-                    currentDraft.draft_id?.let { draftId ->
-                        emailViewModel.sendEmail(context, draftId)
-                    }
-                }
+
+                // Process the command through ViewModel
+                emailViewModel.processUserInput(context, text)
                 finalText.value = ""
             }
         }
@@ -365,6 +377,34 @@ class VoiceInputActivity : ComponentActivity() {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun LoadingOverlay() {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                modifier = Modifier.padding(32.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Processing your request...",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }
@@ -620,6 +660,18 @@ class VoiceInputActivity : ComponentActivity() {
                 showToast(event.message)
             }
         }
+    }
+
+    private fun setupWindow() {
+        WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
+        window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        )
     }
 
     private fun showToast(message: String) {

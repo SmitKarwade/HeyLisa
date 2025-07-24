@@ -1,6 +1,9 @@
 package com.example.heylisa.viewmodel
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -21,20 +24,52 @@ class EmailViewModel(
 
     private val ttsService: TtsService
 
-    init {
-        ttsService = TtsService(context.applicationContext) {
-            Log.d("EmailViewModel", "TTS Service is ready from ViewModel.")
-            // You could optionally speak a welcome message here
+    private val ttsStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                TtsService.TTS_FINISHED, TtsService.TTS_ERROR -> {
+                    // Send processing complete after TTS finishes
+                    Log.d("EmailViewModel", "📤 TTS finished - sending processing complete")
+                    notifyProcessingComplete()
+                }
+            }
         }
     }
 
+    init {
+        ttsService = TtsService(context.applicationContext) {
+            Log.d("EmailViewModel", "TTS Service is ready from ViewModel.")
+        }
+
+        val ttsFilter = IntentFilter().apply {
+            addAction(TtsService.TTS_FINISHED)
+            addAction(TtsService.TTS_ERROR)
+        }
+        context.registerReceiver(ttsStateReceiver, ttsFilter, Context.RECEIVER_EXPORTED)
+    }
+
     private fun speak(text: String) {
-        // This helper centralizes the call to the ttsService
         ttsService.speak(text)
+    }
+
+    // Helper functions to send broadcasts to the service
+    private fun notifyProcessingStarted() {
+        Log.d("EmailViewModel", "📤 Sending PROCESSING_STARTED broadcast")
+        context.sendBroadcast(Intent("com.example.heylisa.PROCESSING_STARTED"))
+    }
+
+    private fun notifyProcessingComplete() {
+        Log.d("EmailViewModel", "📤 Sending PROCESSING_COMPLETE broadcast")
+        context.sendBroadcast(Intent("com.example.heylisa.PROCESSING_COMPLETE"))
     }
 
     override fun onCleared() {
         super.onCleared()
+        try {
+            context.unregisterReceiver(ttsStateReceiver)
+        } catch (e: IllegalArgumentException) {
+            Log.w("EmailViewModel", "TTS receiver not registered: ${e.message}")
+        }
         ttsService.shutdown()
         Log.d("EmailViewModel", "ViewModel cleared, TTS shutdown.")
     }
@@ -48,7 +83,8 @@ class EmailViewModel(
         val currentDraft: DraftResponse? = null,
         val isDraftCreated: Boolean = false,
         val isSpeechActive: Boolean = false,
-        val lastSpeechResult: String? = null
+        val lastSpeechResult: String? = null,
+        val isProcessingBackend: Boolean = false
     )
 
     sealed class IntentResult {
@@ -114,6 +150,8 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
                         speak(errorMessage)
+                        // Don't forget to notify processing complete even on error
+                        notifyProcessingComplete()
                     }
                 }
             }
@@ -135,7 +173,6 @@ class EmailViewModel(
             - Recipient Mentioned: ${intentResponse.recipient_mentioned}
         """.trimIndent())
 
-        // Handle based on navigation instruction first for simplicity
         when (intentResponse.navigation_instruction) {
             "stay_and_edit" -> {
                 handleEditIntent(context, originalInput)
@@ -156,9 +193,12 @@ class EmailViewModel(
                     "send" -> handleSendIntent(context)
                     "other" -> handleOtherIntent(context, intentResponse, originalInput)
                     else -> {
+                        val errorMessage = "Unknown intent: ${intentResponse.intent}"
                         _uiState.value = _uiState.value.copy(
-                            navigationEvent = NavigationEvent.ShowError("Unknown intent: ${intentResponse.intent}")
+                            navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
+                        speak(errorMessage)
+                        notifyProcessingComplete()
                     }
                 }
             }
@@ -178,11 +218,12 @@ class EmailViewModel(
         if (currentDraft?.draft_id != null) {
             editDraft(context, currentDraft.draft_id, input)
         } else {
+            val errorMessage = "No draft available to edit. Create a draft first by saying 'write email to [person]'"
             _uiState.value = _uiState.value.copy(
-                navigationEvent = NavigationEvent.ShowError(
-                    "No draft available to edit. Create a draft first by saying 'write email to [person]'"
-                )
+                navigationEvent = NavigationEvent.ShowError(errorMessage)
             )
+            speak(errorMessage)
+            notifyProcessingComplete()
         }
     }
 
@@ -191,29 +232,29 @@ class EmailViewModel(
         val currentDraft = _uiState.value.currentDraft
 
         if (currentDraft?.draft_id != null) {
-            // Validate draft has required content
             if (currentDraft.to.isNullOrBlank() || currentDraft.body.isNullOrBlank()) {
+                val errorMessage = "Draft is incomplete. Please add recipient and content before sending."
                 _uiState.value = _uiState.value.copy(
-                    navigationEvent = NavigationEvent.ShowError(
-                        "Draft is incomplete. Please add recipient and content before sending."
-                    )
+                    navigationEvent = NavigationEvent.ShowError(errorMessage)
                 )
+                speak(errorMessage)
+                notifyProcessingComplete()
                 return
             }
             sendEmail(context, currentDraft.draft_id)
         } else {
+            val errorMessage = "No draft available to send. Create a draft first."
             _uiState.value = _uiState.value.copy(
-                navigationEvent = NavigationEvent.ShowError(
-                    "No draft available to send. Create a draft first."
-                )
+                navigationEvent = NavigationEvent.ShowError(errorMessage)
             )
+            speak(errorMessage)
+            notifyProcessingComplete()
         }
     }
 
     private fun handleOtherIntent(context: Context, intentResponse: IntentResponse, originalInput: String) {
         Log.d("EmailViewModel", "Handling other intent")
 
-        // Check for navigation instructions
         when (intentResponse.navigation_instruction) {
             "navigate_to_composer" -> {
                 navigateToComposer()
@@ -226,7 +267,6 @@ class EmailViewModel(
                 handleSendIntent(context)
             }
             "show_chat_interface" -> {
-                // Final check if this might be an email-related query
                 val lowerInput = originalInput.lowercase()
                 if ((lowerInput.contains("email") || lowerInput.contains("mail")) &&
                     (lowerInput.contains("send") || lowerInput.contains("write") || lowerInput.contains("draft"))) {
@@ -234,23 +274,23 @@ class EmailViewModel(
                     navigateToComposer()
                     createDraft(context, originalInput)
                 } else {
-                    // Handle as general query
                     _uiState.value = _uiState.value.copy(
                         navigationEvent = NavigationEvent.ToChat
                     )
+                    notifyProcessingComplete()
                 }
             }
             else -> {
+                val errorMessage = intentResponse.suggested_action ?: "I didn't understand that command."
                 _uiState.value = _uiState.value.copy(
-                    navigationEvent = NavigationEvent.ShowError(
-                        intentResponse.suggested_action ?: "I didn't understand that command."
-                    )
+                    navigationEvent = NavigationEvent.ShowError(errorMessage)
                 )
+                speak(errorMessage)
+                notifyProcessingComplete()
             }
         }
     }
 
-    // Navigation Functions
     private fun navigateToComposer() {
         _uiState.value = _uiState.value.copy(
             currentScreen = "composer",
@@ -258,74 +298,97 @@ class EmailViewModel(
         )
     }
 
-    private fun navigateToInbox(context: Context) {
-        _uiState.value = _uiState.value.copy(
-            currentScreen = "inbox",
-            navigationEvent = NavigationEvent.ToInbox
-        )
-        fetchInboxEmails(context)
-    }
-
-    private fun navigateToDrafts() {
-        _uiState.value = _uiState.value.copy(
-            currentScreen = "drafts",
-            navigationEvent = NavigationEvent.ToDrafts
-        )
-    }
-
-    // Email Operations
+    // Modified createDraft with proper service integration
     fun createDraft(context: Context, prompt: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            // Notify service that processing is starting IMMEDIATELY
+            notifyProcessingStarted()
+
+            _uiState.value = _uiState.value.copy(
+                isLoading = true,
+                isProcessingBackend = true
+            )
+
+            Log.d("EmailViewModel", "🚀 Starting draft creation for prompt: '$prompt'")
 
             emailRepository.createDraft(context, prompt) { result ->
                 when (result) {
                     is DraftResult.Success -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
+                            isProcessingBackend = false,
                             currentDraft = result.draftResponse,
                             isDraftCreated = true,
                             navigationEvent = NavigationEvent.ShowSuccess("Email draft created successfully!")
                         )
-                        Log.d("EmailViewModel", "Draft created: ${result.draftResponse.draft_id}")
-                        speak(result.draftResponse.body)
+
+                        Log.d("EmailViewModel", "✅ Draft created successfully: ${result.draftResponse.draft_id}")
+                        speak(result.draftResponse.body ?: "Draft created successfully")
+
+                        // Processing complete will be sent after TTS finishes
+                        // Don't call notifyProcessingComplete() here
                     }
                     is DraftResult.Error -> {
                         val errorMessage = "Failed to create draft: ${result.message}"
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
+                            isProcessingBackend = false,
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
+
                         speak(errorMessage)
-                        Log.e("EmailViewModel", "Draft creation failed: ${result.message}")
+                        Log.e("EmailViewModel", "❌ Draft creation failed: ${result.message}")
+
+                        // Processing complete will be sent after TTS finishes
+                        // Don't call notifyProcessingComplete() here
                     }
                 }
             }
         }
     }
 
+    // Modified editDraft with proper service integration
     fun editDraft(context: Context, draftId: String, editPrompt: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            // Notify service that processing is starting IMMEDIATELY
+            notifyProcessingStarted()
+
+            _uiState.value = _uiState.value.copy(
+                isLoading = true,
+                isProcessingBackend = true
+            )
+
+            Log.d("EmailViewModel", "🚀 Starting draft edit for ID: '$draftId' with prompt: '$editPrompt'")
 
             emailRepository.editDraft(context, draftId, editPrompt) { result ->
                 when (result) {
                     is DraftResult.Success -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
+                            isProcessingBackend = false,
                             currentDraft = result.draftResponse,
                             navigationEvent = NavigationEvent.ShowSuccess("Draft updated successfully!")
                         )
-                        speak(result.draftResponse.body)
-                        Log.d("EmailViewModel", "Draft edited: ${result.draftResponse.draft_id}")
+
+                        speak(result.draftResponse.body ?: "Draft updated successfully")
+                        Log.d("EmailViewModel", "✅ Draft edited successfully: ${result.draftResponse.draft_id}")
+
+                        // Processing complete will be sent after TTS finishes
+                        // Don't call notifyProcessingComplete() here
                     }
                     is DraftResult.Error -> {
+                        val errorMessage = "Failed to edit draft: ${result.message}"
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            navigationEvent = NavigationEvent.ShowError("Failed to edit draft: ${result.message}")
+                            isProcessingBackend = false,
+                            navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
-                        speak("Failed to edit draft: ${result.message}")
-                        Log.e("EmailViewModel", "Draft edit failed: ${result.message}")
+
+                        speak(errorMessage)
+                        Log.e("EmailViewModel", "❌ Draft edit failed: ${result.message}")
+
+                        // Processing complete will be sent after TTS finishes
+                        // Don't call notifyProcessingComplete() here
                     }
                 }
             }
@@ -334,44 +397,41 @@ class EmailViewModel(
 
     fun sendEmail(context: Context, draftId: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true)
+            notifyProcessingStarted()
+
+            _uiState.value = _uiState.value.copy(
+                isLoading = true,
+                isProcessingBackend = true
+            )
+
+            Log.d("EmailViewModel", "🚀 Starting email send for draft ID: '$draftId'")
 
             emailRepository.confirmSend(context, draftId, "send") { result ->
                 when (result) {
                     is SendResult.Success -> {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
+                            isProcessingBackend = false,
                             navigationEvent = NavigationEvent.SendEmail,
                             currentDraft = null,
                             isDraftCreated = false
                         )
-                        Log.d("EmailViewModel", "Email sent successfully")
+
+                        speak("Email sent successfully")
+                        Log.d("EmailViewModel", "✅ Email sent successfully")
+
+                        // Processing complete will be sent after TTS finishes
                     }
                     is SendResult.Error -> {
+                        val errorMessage = "Failed to send email: ${result.message}"
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            navigationEvent = NavigationEvent.ShowError("Failed to send email: ${result.message}")
+                            isProcessingBackend = false,
+                            navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
-                        speak("Failed to send email: ${result.message}")
-                        Log.e("EmailViewModel", "Email send failed: ${result.message}")
-                    }
-                }
-            }
-        }
-    }
 
-    private fun fetchInboxEmails(context: Context) {
-        viewModelScope.launch {
-            emailRepository.fetchInboxEmails(context) { result ->
-                when (result) {
-                    is InboxResult.Success -> {
-                        Log.d("EmailViewModel", "Inbox loaded successfully")
-                    }
-                    is InboxResult.Error -> {
-                        _uiState.value = _uiState.value.copy(
-                            navigationEvent = NavigationEvent.ShowError("Failed to load inbox: ${result.message}")
-                        )
-                        Log.e("EmailViewModel", "Inbox fetch failed: ${result.message}")
+                        speak(errorMessage)
+                        Log.e("EmailViewModel", "❌ Email send failed: ${result.message}")
                     }
                 }
             }
@@ -403,4 +463,5 @@ class EmailViewModel(
     fun getDraftSubject(): String? = _uiState.value.currentDraft?.subject
     fun getDraftBody(): String? = _uiState.value.currentDraft?.body
     fun getDraftId(): String? = _uiState.value.currentDraft?.draft_id
+    fun isProcessingBackend(): Boolean = _uiState.value.isProcessingBackend
 }
