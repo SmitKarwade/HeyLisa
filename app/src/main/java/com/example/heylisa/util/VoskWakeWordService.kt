@@ -52,6 +52,8 @@ class VoskWakeWordService : Service() {
     @Volatile private var isListening = false
     @Volatile private var isShuttingDown = false
     @Volatile private var speechSessionCancelled = false
+    @Volatile private var isSessionActive = false
+
 
     // TTS and Processing state management
     @Volatile private var isTtsSpeaking = false
@@ -89,15 +91,22 @@ class VoskWakeWordService : Service() {
                 }
 
                 "com.example.heylisa.PROCESSING_COMPLETE" -> {
-                    Log.d("HeyLisa", "📥 PROCESSING_COMPLETE received - Current state: isTtsSpeaking=$isTtsSpeaking, isShuttingDown=$isShuttingDown, sessionPaused=$sessionPaused")
+                    Log.d("HeyLisa", "📥 PROCESSING_COMPLETE received - Current state: isTtsSpeaking=$isTtsSpeaking, isShuttingDown=$isShuttingDown, sessionPaused=$sessionPaused, isSessionActive=$isSessionActive")
                     isProcessingResult = false
 
                     if (!isTtsSpeaking && !isShuttingDown) {
-                        Log.d("HeyLisa", "🔄 Conditions met - scheduling session resume")
-                        sessionPaused = false
-                        serviceScope.launch {
-                            delay(500) // Small delay before resuming
-                            resumeSpeechSession()
+                        if (isSessionActive) {
+                            Log.d("HeyLisa", "🔄 Session active - resuming existing session")
+                            serviceScope.launch {
+                                delay(500)
+                                resumeSpeechSession()
+                            }
+                        } else {
+                            Log.d("HeyLisa", "🔄 Session ended - starting new session")
+                            serviceScope.launch {
+                                delay(500)
+                                startSingleContinuousSpeechSession()
+                            }
                         }
                     } else {
                         Log.d("HeyLisa", "❌ Cannot resume - isTtsSpeaking=$isTtsSpeaking, isShuttingDown=$isShuttingDown")
@@ -344,6 +353,7 @@ class VoskWakeWordService : Service() {
         speechRecognitionJob?.cancel()
         speechRecognitionJob = serviceScope.launch {
             try {
+                isSessionActive = true
                 closeSpeechRecognizerSafely()
                 delay(200)
 
@@ -381,7 +391,7 @@ class VoskWakeWordService : Service() {
                 }
 
                 val buffer = ByteArray(bufferSize)
-                val maxSessionTime = 60000L // 60 seconds max
+                val maxSessionTime = 20000L // 60 seconds max
                 val meaningfulSilenceTimeout = 8000L // 8 seconds of meaningful silence to end session
                 val processTimeout = 3000L // 3 seconds to process current speech
 
@@ -446,6 +456,8 @@ class VoskWakeWordService : Service() {
 
                             Log.d("HeyLisa", "▶️ Session resumed - adding ${pauseDuration}ms to paused time (total: ${totalPausedTime}ms)")
                             Log.d("HeyLisa", "🔄 Reset timers - giving user fresh 8 seconds to speak")
+
+                            Log.d("HeyLisa", "🎤 Confirming audio processing restart...")
                         }
                     }
 
@@ -455,9 +467,10 @@ class VoskWakeWordService : Service() {
                     val timeSinceAnyActivity = adjustedCurrentTime - lastAnyActivityTime
                     val timeSinceSessionStart = currentTime - sessionStartTime
 
-                    // Only count time towards session limit when not paused
-                    activeListeningTime += 100 // Approximate since we're checking every 100ms when not paused
-
+                    activeListeningTime += 100
+                    if (activeListeningTime % 5000 == 0L) { // Every 5 seconds
+                        Log.d("HeyLisa", "🔄 Audio loop active - listening for speech...")
+                    }
                     // If 60 seconds of active listening, end session
                     if (timeSinceSessionStart >= maxSessionTime) {
                         Log.d("HeyLisa", "⏰ 60 seconds completed for this interaction cycle - ending speech session")
@@ -529,6 +542,11 @@ class VoskWakeWordService : Service() {
                     // Only read audio if not paused
                     if (!sessionPaused) {
                         val read = record.read(buffer, 0, buffer.size)
+                        if (read > 0) {
+                            Log.d("HeyLisa", "🎵 Reading audio: $read bytes")
+                        } else if (read == 0) {
+                            Log.d("HeyLisa", "⚠️ Audio read returned 0 bytes")
+                        }
                         if (read > 0 && read % 2 == 0) {
                             if (isShuttingDown) break
 
@@ -609,6 +627,7 @@ class VoskWakeWordService : Service() {
             } catch (e: Exception) {
                 Log.e("HeyLisa", "❌ Speech recognition failed", e)
             } finally {
+                isSessionActive = false
                 closeSpeechRecognizerSafely()
                 isListening = false
                 sessionPaused = false
@@ -641,12 +660,21 @@ class VoskWakeWordService : Service() {
     private fun resumeSpeechSession() {
         Log.d("HeyLisa", "🔄 resumeSpeechSession called - Current state: isShuttingDown=$isShuttingDown, sessionPaused=$sessionPaused")
 
-        if (isShuttingDown || sessionPaused) {
-            Log.d("HeyLisa", "❌ Cannot resume - isShuttingDown=$isShuttingDown, sessionPaused=$sessionPaused")
+        if (isShuttingDown) {
+            Log.d("HeyLisa", "❌ Cannot resume - service is shutting down")
+            return
+        }
+
+        if (!isSessionActive) {
+            Log.w("HeyLisa", "⚠️ Session not active - cannot resume, need to restart")
             return
         }
 
         Log.d("HeyLisa", "▶️ Resuming speech recognition session")
+        sessionPaused = false
+
+        // ✅ Add this: Ensure the main loop continues properly
+        Log.d("HeyLisa", "🎤 Audio processing should now resume in main loop")
     }
 
 
