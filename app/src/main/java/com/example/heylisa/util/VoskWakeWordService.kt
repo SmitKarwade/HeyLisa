@@ -385,10 +385,11 @@ class VoskWakeWordService : Service() {
                 val meaningfulSilenceTimeout = 8000L // 8 seconds of meaningful silence to end session
                 val processTimeout = 3000L // 3 seconds to process current speech
 
+
                 var pauseStartTime = 0L
                 var totalPausedTime = 0L
 
-                val sessionStartTime = System.currentTimeMillis()
+                var sessionStartTime = System.currentTimeMillis()
                 var lastMeaningfulSpeechTime = System.currentTimeMillis()
                 var lastAnyActivityTime = System.currentTimeMillis()
                 var activeListeningTime = 0L // Track time actually listening (not paused)
@@ -435,6 +436,9 @@ class VoskWakeWordService : Service() {
                             totalPausedTime += pauseDuration
                             pauseStartTime = 0L
 
+                            sessionStartTime = System.currentTimeMillis()
+                            activeListeningTime = 0L
+
                             // ✅ RESET the meaningful speech timer when resuming
                             val currentAdjustedTime = System.currentTimeMillis() - totalPausedTime
                             lastMeaningfulSpeechTime = currentAdjustedTime
@@ -449,13 +453,14 @@ class VoskWakeWordService : Service() {
                     val adjustedCurrentTime = currentTime - totalPausedTime
                     val timeSinceMeaningfulSpeech = adjustedCurrentTime - lastMeaningfulSpeechTime
                     val timeSinceAnyActivity = adjustedCurrentTime - lastAnyActivityTime
+                    val timeSinceSessionStart = currentTime - sessionStartTime
 
                     // Only count time towards session limit when not paused
                     activeListeningTime += 100 // Approximate since we're checking every 100ms when not paused
 
                     // If 60 seconds of active listening, end session
-                    if (activeListeningTime >= maxSessionTime) {
-                        Log.d("HeyLisa", "⏰ 60 seconds of active listening completed - ending speech session")
+                    if (timeSinceSessionStart >= maxSessionTime) {
+                        Log.d("HeyLisa", "⏰ 60 seconds completed for this interaction cycle - ending speech session")
                         break
                     }
 
