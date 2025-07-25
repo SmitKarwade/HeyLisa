@@ -75,7 +75,7 @@ class CloudTtsService(
         }
     }
 
-    fun speak(text: String, voiceName: String = "en-US-Neural2-A") {
+    fun speak(text: String, voiceName: String = VoiceStyles.MALE_CONFIDENT) {
         Log.d("CloudTtsService", "speak() called with text: '$text', isInitialized: $isInitialized")
 
         if (!isInitialized) {
@@ -210,7 +210,7 @@ class CloudTtsService(
 
     // Available voice options for different styles
     object VoiceStyles {
-        const val FEMALE_WARM = "en-US-Neural2-A"      // Warm female voice
+        const val MALE_WARM = "en-US-Neural2-A"      // Warm female voice
         const val MALE_CONFIDENT = "en-US-Neural2-D"    // Confident male voice
         const val FEMALE_PROFESSIONAL = "en-US-Neural2-E" // Professional female
         const val MALE_FRIENDLY = "en-US-Neural2-J"     // Friendly male voice
