@@ -1,8 +1,10 @@
 package com.example.heylisa.service
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.util.Log
 import com.google.auth.oauth2.ServiceAccountCredentials
@@ -149,23 +151,57 @@ class CloudTtsService(
         try {
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
+                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+                // ✅ Check if screen recording might be active
+                val isLikelyRecording = isScreenRecordingLikely()
+
                 setAudioAttributes(
                     AudioAttributes.Builder()
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setUsage(
+                            when {
+                                // Force to earpiece/call audio when recording detected
+                                isLikelyRecording -> AudioAttributes.USAGE_VOICE_COMMUNICATION
+                                // Use media for normal operation
+                                else -> AudioAttributes.USAGE_MEDIA
+                            }
+                        )
                         .build()
                 )
+
+                // ✅ Force audio routing when recording detected
+                if (isLikelyRecording) {
+                    // Force to earpiece (less likely to be picked up by screen recorder's mic)
+                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                    audioManager.isSpeakerphoneOn = false
+                    Log.d("CloudTtsService", "📱 Recording detected - TTS routed to earpiece")
+                } else {
+                    // Normal audio routing
+                    audioManager.mode = AudioManager.MODE_NORMAL
+                    if (audioManager.isWiredHeadsetOn || audioManager.isBluetoothA2dpOn) {
+                        Log.d("CloudTtsService", "🎧 Headphones detected - TTS routed to headphones")
+                    } else {
+                        Log.d("CloudTtsService", "🔊 Normal speaker output")
+                    }
+                }
 
                 setDataSource(audioFile.absolutePath)
 
                 setOnCompletionListener {
+                    if (isLikelyRecording) {
+                        audioManager.mode = AudioManager.MODE_NORMAL
+                    }
                     isSpeaking = false
-                    audioFile.delete() // Clean up temp file
+                    audioFile.delete()
                     context.sendBroadcast(Intent(TTS_FINISHED))
                     Log.d("CloudTtsService", "🔇 TTS finished speaking")
                 }
 
                 setOnErrorListener { _, what, extra ->
+                    if (isLikelyRecording) {
+                        audioManager.mode = AudioManager.MODE_NORMAL
+                    }
                     Log.e("CloudTtsService", "MediaPlayer error: what=$what, extra=$extra")
                     isSpeaking = false
                     audioFile.delete()
@@ -183,6 +219,49 @@ class CloudTtsService(
             audioFile.delete()
             context.sendBroadcast(Intent(TTS_ERROR))
         }
+    }
+
+    private fun isScreenRecordingLikely(): Boolean {
+        return try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            // Check various indicators that recording might be active
+            val hasActiveRecording = audioManager.mode == AudioManager.MODE_IN_COMMUNICATION ||
+                    audioManager.isMusicActive ||
+                    isScreenRecordingAppRunning()
+
+            // You could also add a manual toggle for demo recordings
+            val isManualRecordingMode = getManualRecordingMode()
+
+            hasActiveRecording || isManualRecordingMode
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun isScreenRecordingAppRunning(): Boolean {
+        // Check for common screen recording apps
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val runningApps = activityManager.runningAppProcesses
+
+        val screenRecorderPackages = listOf(
+            "com.hecorat.screenrecorder.free",  // AZ Screen Recorder
+            "com.mobizen.mirroring.app",        // Mobizen
+            "com.duapps.recorder",              // DU Recorder
+            "com.android.systemui"              // Built-in recorder
+        )
+
+        return runningApps?.any { process ->
+            screenRecorderPackages.any { pkg ->
+                process.processName.contains(pkg, ignoreCase = true)
+            }
+        } ?: false
+    }
+
+    private fun getManualRecordingMode(): Boolean {
+        // You could add a setting/preference for this
+        val prefs = context.getSharedPreferences("tts_settings", Context.MODE_PRIVATE)
+        return prefs.getBoolean("demo_recording_mode", false)
     }
 
     fun stop() {
