@@ -41,6 +41,17 @@ android {
     buildFeatures {
         compose = true
     }
+
+    packaging {
+        resources {
+            excludes.add("META-INF/DEPENDENCIES")
+            excludes.add("META-INF/INDEX.LIST")
+            excludes.add("META-INF/LICENSE")
+            excludes.add("META-INF/LICENSE.txt")
+            excludes.add("META-INF/NOTICE")
+            excludes.add("META-INF/NOTICE.txt")
+        }
+    }
 }
 
 dependencies {
@@ -57,6 +68,14 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.2")
 
     implementation("androidx.navigation:navigation-compose:2.9.2")
+
+    implementation("com.google.cloud:google-cloud-texttospeech:2.69.0")
+
+    implementation("io.grpc:grpc-okhttp:1.73.0")
+    implementation("io.grpc:grpc-protobuf:1.73.0")
+    implementation("io.grpc:grpc-stub:1.73.0")
+
+    implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
 
 
     implementation(libs.androidx.core.ktx)

@@ -12,7 +12,7 @@ import com.example.heylisa.repository.EmailRepository
 import com.example.heylisa.request.ConfirmSendResponse
 import com.example.heylisa.request.DraftResponse
 import com.example.heylisa.request.InboxResponse
-import com.example.heylisa.service.TtsService
+import com.example.heylisa.service.CloudTtsService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -23,12 +23,12 @@ class EmailViewModel(
 ) : ViewModel() {
 
     private var isFirstDraftCreation = true
-    private val ttsService: TtsService
+    private val cloudttsService: CloudTtsService
 
     private val ttsStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                TtsService.TTS_FINISHED, TtsService.TTS_ERROR -> {
+                CloudTtsService.TTS_FINISHED, CloudTtsService.TTS_ERROR -> {
                     // Send processing complete after TTS finishes
                     Log.d("EmailViewModel", "📤 TTS finished - sending processing complete")
                     notifyProcessingComplete()
@@ -38,19 +38,19 @@ class EmailViewModel(
     }
 
     init {
-        ttsService = TtsService(context.applicationContext) {
+        cloudttsService = CloudTtsService(context.applicationContext) {
             Log.d("EmailViewModel", "TTS Service is ready from ViewModel.")
         }
 
         val ttsFilter = IntentFilter().apply {
-            addAction(TtsService.TTS_FINISHED)
-            addAction(TtsService.TTS_ERROR)
+            addAction(CloudTtsService.TTS_FINISHED)
+            addAction(CloudTtsService.TTS_ERROR)
         }
         context.registerReceiver(ttsStateReceiver, ttsFilter, Context.RECEIVER_EXPORTED)
     }
 
     private fun speak(text: String) {
-        ttsService.speak(text)
+        cloudttsService.speak(text)
     }
 
     // Helper functions to send broadcasts to the service
@@ -71,9 +71,10 @@ class EmailViewModel(
         } catch (e: IllegalArgumentException) {
             Log.w("EmailViewModel", "TTS receiver not registered: ${e.message}")
         }
-        ttsService.shutdown()
+        cloudttsService.shutdown()
         Log.d("EmailViewModel", "ViewModel cleared, TTS shutdown.")
     }
+
 
     data class EmailUiState(
         val isLoading: Boolean = false,
@@ -151,8 +152,6 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
                         speak(errorMessage)
-                        // Don't forget to notify processing complete even on error
-                        notifyProcessingComplete()
                     }
                 }
             }
@@ -199,7 +198,6 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
                         speak(errorMessage)
-                        notifyProcessingComplete()
                     }
                 }
             }
@@ -224,7 +222,6 @@ class EmailViewModel(
                 navigationEvent = NavigationEvent.ShowError(errorMessage)
             )
             speak(errorMessage)
-            notifyProcessingComplete()
         }
     }
 
@@ -239,7 +236,6 @@ class EmailViewModel(
                     navigationEvent = NavigationEvent.ShowError(errorMessage)
                 )
                 speak(errorMessage)
-                notifyProcessingComplete()
                 return
             }
             sendEmail(context, currentDraft.draft_id)
@@ -249,7 +245,6 @@ class EmailViewModel(
                 navigationEvent = NavigationEvent.ShowError(errorMessage)
             )
             speak(errorMessage)
-            notifyProcessingComplete()
         }
     }
 

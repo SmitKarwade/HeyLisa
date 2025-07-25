@@ -24,8 +24,7 @@ import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
 import com.example.heylisa.constant.Noisy
-import com.example.heylisa.service.TtsService
-import com.example.heylisa.util.CheckRole
+import com.example.heylisa.service.CloudTtsService
 import com.example.heylisa.voice.VoiceInputActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,13 +71,13 @@ class VoskWakeWordService : Service() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 // TTS State Management
-                TtsService.TTS_STARTED -> {
+                CloudTtsService.TTS_STARTED -> {
                     Log.d("HeyLisa", "🔊 TTS started - pausing speech recognition")
                     isTtsSpeaking = true
                     sessionPaused = true
                 }
 
-                TtsService.TTS_FINISHED, TtsService.TTS_ERROR -> {
+                CloudTtsService.TTS_FINISHED, CloudTtsService.TTS_ERROR -> {
                     Log.d("HeyLisa", "🔇 TTS finished")
                     isTtsSpeaking = false
                 }
@@ -151,9 +150,9 @@ class VoskWakeWordService : Service() {
 
         // Register all broadcast receivers
         val stateFilter = IntentFilter().apply {
-            addAction(TtsService.TTS_STARTED)
-            addAction(TtsService.TTS_FINISHED)
-            addAction(TtsService.TTS_ERROR)
+            addAction(CloudTtsService.TTS_STARTED)
+            addAction(CloudTtsService.TTS_FINISHED)
+            addAction(CloudTtsService.TTS_ERROR)
             addAction("com.example.heylisa.PROCESSING_STARTED")
             addAction("com.example.heylisa.PROCESSING_COMPLETE")
             addAction("com.example.heylisa.RESTORE_WAKE_WORD")
