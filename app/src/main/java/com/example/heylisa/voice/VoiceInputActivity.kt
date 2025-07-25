@@ -283,97 +283,113 @@ class VoiceInputActivity : ComponentActivity() {
         val uiState by emailViewModel.uiState.collectAsState()
         val currentDraft = uiState.currentDraft
 
-        // Handle voice commands in composer - MODIFIED to respect TTS state
-        LaunchedEffect(finalText.value, isTtsSpeaking.value) {
-            val text = finalText.value.trim()
-            if (text.isNotEmpty() && currentDraft != null && !isTtsSpeaking.value) {
-                Log.d("VoiceInputActivity", "Processing voice command in composer: '$text'")
-
-                // Process the command through ViewModel
-                emailViewModel.processUserInput(context, text)
-                finalText.value = ""
+        LaunchedEffect(currentDraft?.subject, currentDraft?.to, currentDraft?.body) {
+            if (currentDraft != null) {
+                Log.d("VoiceInputActivity", "🔄 Draft data changed:")
+                Log.d("VoiceInputActivity", "   Draft ID: '${currentDraft.draft_id}'")
+                Log.d("VoiceInputActivity", "   Subject: '${currentDraft.subject}'")
+                Log.d("VoiceInputActivity", "   To: '${currentDraft.to}'")
+                Log.d("VoiceInputActivity", "   Body preview: '${currentDraft.body?.take(50)}...'")
+                Log.d("VoiceInputActivity", "   Edit Summary: '${currentDraft.edit_summary}'")
             }
         }
 
-        // Force UI refresh after state change (e.g., after edit)
-        LaunchedEffect(uiState.currentDraft) {
-            if (uiState.currentDraft != null) {
-                // Optional: Add animation or refresh logic if needed
-                Log.d("VoiceInputActivity", "Draft updated in UI")
-            }
-        }
+        key(currentDraft?.draft_id, currentDraft?.subject, currentDraft?.to, currentDraft?.body) {
+            LaunchedEffect(finalText.value, isTtsSpeaking.value) {
+                val text = finalText.value.trim()
+                if (text.isNotEmpty() && currentDraft != null && !isTtsSpeaking.value) {
+                    Log.d("VoiceInputActivity", "Processing voice command in composer: '$text'")
 
-        // Create interaction source to prevent graying out on touch
-        val interactionSource = remember { MutableInteractionSource() }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.7f))
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null
-                ) {
-                    // Empty click handler - prevents closing but removes ripple effect
+                    // Process the command through ViewModel
+                    emailViewModel.processUserInput(context, text)
+                    finalText.value = ""
                 }
-        ) {
-            Surface(
+            }
+
+            // Force UI refresh after state change (e.g., after edit)
+            LaunchedEffect(uiState.currentDraft) {
+                if (uiState.currentDraft != null) {
+                    // Optional: Add animation or refresh logic if needed
+                    Log.d("VoiceInputActivity", "📱 UI refreshed with draft: ${uiState.currentDraft?.draft_id}")
+                    Log.d("VoiceInputActivity", "📱 Current subject in UI: '${uiState.currentDraft?.subject}'")
+                }
+            }
+
+            // Create interaction source to prevent graying out on touch
+            val interactionSource = remember { MutableInteractionSource() }
+
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.9f)
-                    .padding(16.dp)
-                    .align(Alignment.Center),
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                shadowElevation = 8.dp
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.7f))
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null
+                    ) {
+                        // Empty click handler - prevents closing but removes ripple effect
+                    }
             ) {
-                Column(
+                Surface(
                     modifier = Modifier
-                        .padding(20.dp)
-                        .fillMaxSize()
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.9f)
+                        .padding(16.dp)
+                        .align(Alignment.Center),
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color.White,
+                    shadowElevation = 8.dp
                 ) {
-                    // Header
-                    ComposeHeader(onDismiss = onDismiss)
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Voice command hint
-                    //VoiceCommandHint()
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Email content or loading
-                    if (currentDraft != null) {
-                        EmailContent(
-                            draft = currentDraft,
-                            isLoading = uiState.isLoading,
-                            modifier = Modifier.weight(1f)
-                        )
+                    Column(
+                        modifier = Modifier
+                            .padding(20.dp)
+                            .fillMaxSize()
+                    ) {
+                        // Header
+                        ComposeHeader(onDismiss = onDismiss)
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // Action buttons
-                        ActionButtons(
-                            currentDraft = currentDraft,
-                            isLoading = uiState.isLoading,
-                            onDismiss = onDismiss,
-                            onSend = { draftId ->
-                                emailViewModel.sendEmail(context, draftId)
-                            }
-                        )
-                    } else {
-                        // Loading state
-                        Box(
-                            modifier = Modifier.weight(1f),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator()
-                                Spacer(modifier = Modifier.height(16.dp))
-                                Text(
-                                    text = "Generating email draft...",
-                                    style = MaterialTheme.typography.bodyLarge
+                        // Voice command hint
+                        //VoiceCommandHint()
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Email content or loading
+                        if (currentDraft != null) {
+                            key(currentDraft.draft_id, currentDraft.subject, currentDraft.to) {
+                                EmailContent(
+                                    draft = currentDraft,
+                                    isLoading = uiState.isLoading,
+                                    modifier = Modifier.weight(1f)
                                 )
+                            }
+
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                            // Action buttons
+                            ActionButtons(
+                                currentDraft = currentDraft,
+                                isLoading = uiState.isLoading,
+                                onDismiss = onDismiss,
+                                onSend = { draftId ->
+                                    emailViewModel.sendEmail(context, draftId)
+                                }
+                            )
+                        } else {
+                            // Loading state
+                            Box(
+                                modifier = Modifier.weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator()
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text(
+                                        text = "Generating email draft...",
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                }
                             }
                         }
                     }
@@ -468,11 +484,11 @@ class VoiceInputActivity : ComponentActivity() {
             )
 
             // Subject Field
-//            EmailDisplayField(
-//                label = "Subject",
-//                value = draft.subject ?: "",
-//                placeholder = "Subject will appear here"
-//            )
+            EmailDisplayField(
+                label = "Subject",
+                value = draft.subject ?: "",
+                placeholder = "Subject will appear here"
+            )
 
             // Body Field with scroll
             Column(modifier = Modifier.weight(1f)) {
@@ -549,6 +565,10 @@ class VoiceInputActivity : ComponentActivity() {
         value: String,
         placeholder: String
     ) {
+        LaunchedEffect(value) {
+            Log.d("EmailDisplayField", "📝 $label field received value: '$value'")
+        }
+
         Column {
             Text(
                 text = label,
@@ -557,28 +577,29 @@ class VoiceInputActivity : ComponentActivity() {
                 modifier = Modifier.padding(bottom = 4.dp)
             )
 
-            OutlinedTextField(
-                value = value,
-                onValueChange = { },
-                enabled = false,
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = {
-                    Text(
-                        placeholder,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
-                    disabledBorderColor = MaterialTheme.colorScheme.outline,
-                    disabledPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                ),
-                shape = RoundedCornerShape(8.dp),
-                singleLine = true
-            )
+            key(value) {
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { },
+                    enabled = false,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = {
+                        Text(
+                            placeholder,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                        disabledBorderColor = MaterialTheme.colorScheme.outline,
+                        disabledPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    singleLine = true
+                )
+            }
         }
     }
-
     @Composable
     fun ActionButtons(
         currentDraft: DraftResponse?,
