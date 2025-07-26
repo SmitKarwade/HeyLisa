@@ -3,9 +3,11 @@ package com.example.heylisa.main
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -79,7 +81,8 @@ fun TransparentScaffoldWithToolbar(
                     Text(
                         text = "Recents",
                         style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier.padding(16.dp),
+                        fontFamily = cstFont
                     )
                     HorizontalDivider(
                         Modifier,
@@ -98,7 +101,8 @@ fun TransparentScaffoldWithToolbar(
                     Text(
                         text = "Menu",
                         style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier.padding(16.dp),
+                        fontFamily = cstFont
                     )
                     HorizontalDivider(
                         Modifier.padding(vertical = 8.dp),
@@ -164,9 +168,10 @@ fun TransparentScaffoldWithToolbar(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Red, contentColor = Color.White)
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black.copy(alpha = 0.7f)),
+                        border = BorderStroke(1.dp, Color.Black.copy(alpha = 0.3f))
                     ) {
-                        Text("Sign Out")
+                        Text("Sign Out", fontSize = 16.sp, fontFamily = cstFont)
                     }
                 }
             }
@@ -298,33 +303,5 @@ fun ModelDownloadDialog(show: Boolean, progress: Float, isUnzipping: Boolean) {
             },
             confirmButton = {}
         )
-    }
-}
-
-@Composable
-fun WakeWordServiceControl(modifier: Modifier = Modifier, context: Context) {
-    val isRunning = remember { mutableStateOf(false) }
-
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Button(onClick = {
-            val intent = Intent(context, VoskWakeWordService::class.java)
-            ContextCompat.startForegroundService(context, intent)
-            isRunning.value = true
-        }) {
-            Text("Start Wake Word Detection")
-        }
-
-        if (isRunning.value) {
-            Button(onClick = {
-                context.stopService(Intent(context, VoskWakeWordService::class.java))
-                isRunning.value = false
-            }) {
-                Text("Stop Service")
-            }
-        }
     }
 }
