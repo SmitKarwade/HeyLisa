@@ -20,6 +20,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.heylisa.R
 import com.example.heylisa.util.VoskWakeWordService
@@ -250,24 +251,13 @@ fun SettingsScreen(
         ) {
             IconButton(onClick = onNavigateBack) {
                 Icon(
-                    painter = painterResource(android.R.drawable.ic_menu_revert),
+                    painter = painterResource(R.drawable.back_nav),
                     contentDescription = "Back",
                     tint = Color.Black,
                     modifier = Modifier.size(24.dp)
                 )
             }
-            Text(
-                text = "Settings",
-                style = MaterialTheme.typography.titleLarge,
-                color = Color.Black,
-                modifier = Modifier.padding(start = 8.dp)
-            )
         }
-
-        HorizontalDivider(
-            color = Color.Black.copy(alpha = 0.3f)
-        )
-
         // Settings content
         Box(
             modifier = Modifier
@@ -278,7 +268,8 @@ fun SettingsScreen(
             Text(
                 text = "Settings Screen",
                 style = MaterialTheme.typography.headlineMedium,
-                color = Color.Black.copy(alpha = 0.7f)
+                color = Color.Black.copy(alpha = 0.7f),
+                fontSize = 18.sp
             )
         }
     }
