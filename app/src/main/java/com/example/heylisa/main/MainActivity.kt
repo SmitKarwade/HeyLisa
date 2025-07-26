@@ -245,8 +245,8 @@ class MainActivity : ComponentActivity() {
         val voiceService = Settings.Secure.getString(contentResolver, "voice_interaction_service")
         Log.d("HeyLisa", "Voice Service: $voiceService")
         val isVoiceService = voiceService?.contains("com.example.heylisa/.custom.LisaVoiceInteractionService") == true
-        Log.d("HeyLisa", "Assistant: $isAssistant, Can Draw: $canDraw, Voice Service: $isVoiceService")
-        return isAssistant && canDraw
+        Log.d("HeyLisa", "Assistant: $isAssistant, Can Draw: $canDraw, Logged in: $isLoggedIn")
+        return isAssistant && canDraw && isLoggedIn
     }
 
     private fun startWakeWordService() {
