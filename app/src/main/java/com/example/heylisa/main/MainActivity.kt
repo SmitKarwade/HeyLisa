@@ -23,6 +23,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.core.view.WindowInsetsControllerCompat
@@ -91,8 +92,6 @@ class MainActivity : ComponentActivity() {
 
         googleSignInClient = getGoogleSignInClient(this)
 
-        checkAndRequestPermission()
-
         setContent {
             HeyLisaTheme {
                 if (!isLoggedIn) {
@@ -112,6 +111,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            checkAndRequestPermission()
+        }, 500)
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -240,9 +243,10 @@ class MainActivity : ComponentActivity() {
         val isAssistant = roleManager.isRoleHeld(RoleManager.ROLE_ASSISTANT)
         val canDraw = Settings.canDrawOverlays(this)
         val voiceService = Settings.Secure.getString(contentResolver, "voice_interaction_service")
+        Log.d("HeyLisa", "Voice Service: $voiceService")
         val isVoiceService = voiceService?.contains("com.example.heylisa/.custom.LisaVoiceInteractionService") == true
         Log.d("HeyLisa", "Assistant: $isAssistant, Can Draw: $canDraw, Voice Service: $isVoiceService")
-        return isAssistant && canDraw && isVoiceService
+        return isAssistant && canDraw
     }
 
     private fun startWakeWordService() {
@@ -335,11 +339,24 @@ fun MainScreen(
     onSignOut: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
-        TransparentScaffoldWithToolbar(
-            context = context,
-            googleSignInClient = googleSignInClient,
-            onSignOut = onSignOut
-        )
+        var currentScreen by remember { mutableStateOf("main") }
+        val context = LocalContext.current
+
+        when (currentScreen) {
+            "main" -> {
+                TransparentScaffoldWithToolbar(
+                    context = context,
+                    googleSignInClient = googleSignInClient,
+                    onSignOut = onSignOut,
+                    onNavigateToSettings = { currentScreen = "settings" }
+                )
+            }
+            "settings" -> {
+                SettingsScreen(
+                    onNavigateBack = { currentScreen = "main" }
+                )
+            }
+        }
 
         ModelDownloadDialog(
             show = showDialog,
@@ -371,11 +388,11 @@ fun MainScreen(
             )
         }
 
-        WakeWordServiceControl(
-            context = context,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(24.dp)
-        )
+//        WakeWordServiceControl(
+//            context = context,
+//            modifier = Modifier
+//                .align(Alignment.BottomCenter)
+//                .padding(24.dp)
+//        )
     }
 }

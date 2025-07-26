@@ -4,7 +4,11 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -12,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.*
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -28,7 +31,8 @@ import kotlinx.coroutines.launch
 fun TransparentScaffoldWithToolbar(
     context: Context,
     googleSignInClient: GoogleSignInClient,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    onNavigateToSettings: () -> Unit = {} // Add navigation callback
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -41,6 +45,22 @@ fun TransparentScaffoldWithToolbar(
         Font(R.font.poppins_regular)
     )
     val statusBarPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+
+    // Function to restart Vosk service
+    fun restartVoskService() {
+        try {
+            // Stop the service
+            context.stopService(Intent(context, VoskWakeWordService::class.java))
+
+            // Start the service again after a small delay
+            val intent = Intent(context, VoskWakeWordService::class.java)
+            ContextCompat.startForegroundService(context, intent)
+
+            Toast.makeText(context, "Wake word service restarted", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Error restarting service: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -65,13 +85,77 @@ fun TransparentScaffoldWithToolbar(
                         DividerDefaults.Thickness,
                         color = Color.Black.copy(alpha = 0.3f)
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = "Not available for now",
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(16.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp),
                         color = Color.Black.copy(alpha = 0.7f)
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
 
+                    Text(
+                        text = "Menu",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                    HorizontalDivider(
+                        Modifier.padding(vertical = 8.dp),
+                        DividerDefaults.Thickness,
+                        color = Color.Black.copy(alpha = 0.3f)
+                    )
+
+                    // Refresh option
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                scope.launch {
+                                    drawerState.close()
+                                    restartVoskService()
+                                }
+                            }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Refresh",
+                            tint = Color.Black.copy(alpha = 0.7f)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Refresh Service",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.Black.copy(alpha = 0.8f)
+                        )
+                    }
+
+                    // Settings option
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                scope.launch {
+                                    drawerState.close()
+                                    onNavigateToSettings()
+                                }
+                            }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = Color.Black.copy(alpha = 0.7f)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "Settings",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.Black.copy(alpha = 0.8f)
+                        )
+                    }
 
                     Spacer(modifier = Modifier.weight(1f)) // Push content to bottom
                     Button(
@@ -144,6 +228,62 @@ fun TransparentScaffoldWithToolbar(
     }
 }
 
+// Settings Screen Composable
+@Composable
+fun SettingsScreen(
+    onNavigateBack: () -> Unit
+) {
+    val statusBarPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = statusBarPadding)
+            .background(Color.White)
+    ) {
+        // Simple app bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onNavigateBack) {
+                Icon(
+                    painter = painterResource(android.R.drawable.ic_menu_revert),
+                    contentDescription = "Back",
+                    tint = Color.Black,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            Text(
+                text = "Settings",
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.Black,
+                modifier = Modifier.padding(start = 8.dp)
+            )
+        }
+
+        HorizontalDivider(
+            color = Color.Black.copy(alpha = 0.3f)
+        )
+
+        // Settings content
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "Settings Screen",
+                style = MaterialTheme.typography.headlineMedium,
+                color = Color.Black.copy(alpha = 0.7f)
+            )
+        }
+    }
+}
+
 @Composable
 fun ModelDownloadDialog(show: Boolean, progress: Float, isUnzipping: Boolean) {
     if (show) {
@@ -157,10 +297,10 @@ fun ModelDownloadDialog(show: Boolean, progress: Float, isUnzipping: Boolean) {
                     Text(if (isUnzipping) "Extracting files..." else "Downloading required files...")
                     Spacer(Modifier.height(8.dp))
                     LinearProgressIndicator(
-                    progress = { progress },
+                        progress = { progress },
                         color = ProgressIndicatorDefaults.linearColor,
-                    trackColor = ProgressIndicatorDefaults.linearTrackColor,
-                    strokeCap = ProgressIndicatorDefaults.LinearStrokeCap,
+                        trackColor = ProgressIndicatorDefaults.linearTrackColor,
+                        strokeCap = ProgressIndicatorDefaults.LinearStrokeCap,
                     )
                     Text("${(progress * 100).toInt()}%")
                 }
@@ -197,5 +337,3 @@ fun WakeWordServiceControl(modifier: Modifier = Modifier, context: Context) {
         }
     }
 }
-
-
