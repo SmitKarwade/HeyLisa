@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -174,44 +175,41 @@ class VoiceInputActivity : ComponentActivity() {
             }
         }
 
-        // Main UI Layout
-        Box(
+        // Main UI Layout - MODIFIED to respect system UI
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Transparent)
-                .clickable {
-                    if (!showEmailCompose) {
-                        finish()
-                    }
-                }
+                .statusBarsPadding()
+                .navigationBarsPadding()
         ) {
-            // Voice Input Bar at bottom
-            VoiceInputBar(
-                modifier = Modifier.align(Alignment.BottomCenter),
-                emailViewModel = emailViewModel
-            )
-
-            // Email Compose Overlay
             if (showEmailCompose) {
                 EmailComposeScreen(
                     onDismiss = {
                         showEmailCompose = false
                         emailViewModel.clearDraft()
                     },
-                    emailViewModel = emailViewModel
+                    emailViewModel = emailViewModel,
+                    modifier = Modifier.weight(1f) // Takes remaining space
+                )
+            } else {
+                // Empty space when compose is not shown - clickable to close
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .clickable { finish() }
                 )
             }
+
+            // Voice Input Bar - always at bottom with fixed height
+            VoiceInputBar(
+                emailViewModel = emailViewModel
+            )
 
             // Loading Overlay - Only show when not in compose mode
             if (uiState.isLoading && !showEmailCompose) {
                 LoadingOverlay()
-            }
-
-            // TTS Speaking Indicator
-            if (isTtsSpeaking.value) {
-//                TtsSpeakingIndicator(
-//                    modifier = Modifier.align(Alignment.TopCenter)
-//                )
             }
         }
     }
@@ -250,34 +248,39 @@ class VoiceInputActivity : ComponentActivity() {
 
     @Composable
     fun VoiceInputBar(
-        modifier: Modifier = Modifier,
         emailViewModel: EmailViewModel
     ) {
-        Box(
-            modifier = modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = Color.Transparent
         ) {
-            HeyLisaBar(
-                text = partialText,
-                onMicClick = { /* Mic functionality handled by broadcast receiver */ },
-                onSendClick = {
-                    if (partialText.value.isNotEmpty() && !isTtsSpeaking.value) {
-                        emailViewModel.processUserInput(this@VoiceInputActivity, partialText.value)
-                        partialText.value = ""
-                    }
-                },
-                onTextChange = { partialText.value = it },
-                isListening = isListening.value && !isTtsSpeaking.value // Modify listening state
-            )
+            Box(
+                modifier = Modifier.padding(bottom = 16.dp, start = 8.dp, end = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                HeyLisaBar(
+                    text = partialText,
+                    onMicClick = { /* Mic functionality handled by broadcast receiver */ },
+                    onSendClick = {
+                        if (partialText.value.isNotEmpty() && !isTtsSpeaking.value) {
+                            emailViewModel.processUserInput(this@VoiceInputActivity, partialText.value)
+                            partialText.value = ""
+                        }
+                    },
+                    onTextChange = { partialText.value = it },
+                    isListening = isListening.value && !isTtsSpeaking.value
+                )
+            }
         }
     }
 
     @Composable
     fun EmailComposeScreen(
         onDismiss: () -> Unit,
-        emailViewModel: EmailViewModel
+        emailViewModel: EmailViewModel,
+        modifier: Modifier = Modifier // Add modifier parameter
     ) {
         val context = LocalContext.current
         val uiState by emailViewModel.uiState.collectAsState()
@@ -299,97 +302,77 @@ class VoiceInputActivity : ComponentActivity() {
                 val text = finalText.value.trim()
                 if (text.isNotEmpty() && currentDraft != null && !isTtsSpeaking.value) {
                     Log.d("VoiceInputActivity", "Processing voice command in composer: '$text'")
-
-                    // Process the command through ViewModel
                     emailViewModel.processUserInput(context, text)
                     finalText.value = ""
                 }
             }
 
-            // Force UI refresh after state change (e.g., after edit)
             LaunchedEffect(uiState.currentDraft) {
                 if (uiState.currentDraft != null) {
-                    // Optional: Add animation or refresh logic if needed
                     Log.d("VoiceInputActivity", "📱 UI refreshed with draft: ${uiState.currentDraft?.draft_id}")
                     Log.d("VoiceInputActivity", "📱 Current subject in UI: '${uiState.currentDraft?.subject}'")
                 }
             }
 
-            // Create interaction source to prevent graying out on touch
-            val interactionSource = remember { MutableInteractionSource() }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.7f))
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = null
-                    ) {
-                        // Empty click handler - prevents closing but removes ripple effect
-                    }
+            // Use the modifier and remove overlay background
+            Surface(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(16.dp),
+                color = Color.White,
+                shadowElevation = 8.dp,
+                tonalElevation = 4.dp
             ) {
-                Surface(
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.9f)
-                        .padding(16.dp)
-                        .align(Alignment.Center),
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color.White,
-                    shadowElevation = 8.dp
+                        .padding(20.dp)
+                        .fillMaxSize()
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .padding(20.dp)
-                            .fillMaxSize()
-                    ) {
-                        // Header
-                        ComposeHeader(onDismiss = onDismiss)
+                    // Header
+                    ComposeHeader(onDismiss = onDismiss)
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                        // Voice command hint
-                        //VoiceCommandHint()
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Email content or loading
-                        if (currentDraft != null) {
-                            key(currentDraft.draft_id, currentDraft.subject, currentDraft.to) {
-                                EmailContent(
-                                    draft = currentDraft,
-                                    isLoading = uiState.isLoading,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                            // Action buttons
-                            ActionButtons(
-                                currentDraft = currentDraft,
+                    // Email content or loading
+                    if (currentDraft != null) {
+                        key(currentDraft.draft_id, currentDraft.subject, currentDraft.to) {
+                            EmailContent(
+                                draft = currentDraft,
                                 isLoading = uiState.isLoading,
-                                onDismiss = onDismiss,
-                                onSend = { draftId ->
-                                    emailViewModel.sendEmail(context, draftId)
-                                }
+                                modifier = Modifier.weight(1f)
                             )
-                        } else {
-                            // Loading state
-                            Box(
-                                modifier = Modifier.weight(1f),
-                                contentAlignment = Alignment.Center
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Action buttons
+                        ActionButtons(
+                            currentDraft = currentDraft,
+                            isLoading = uiState.isLoading,
+                            onDismiss = onDismiss,
+                            onSend = { draftId ->
+                                emailViewModel.sendEmail(context, draftId)
+                            }
+                        )
+                    } else {
+                        // Loading state - FIXED: Properly centered
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
                             ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    CircularProgressIndicator()
-                                    Spacer(modifier = Modifier.height(16.dp))
-                                    Text(
-                                        text = "Generating email draft...",
-                                        style = MaterialTheme.typography.bodyLarge
-                                    )
-                                }
+                                CircularProgressIndicator()
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    text = "Generating email draft...",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
                             }
                         }
                     }
@@ -408,7 +391,7 @@ class VoiceInputActivity : ComponentActivity() {
         ) {
             Card(
                 modifier = Modifier.padding(32.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
                 Column(
@@ -443,26 +426,11 @@ class VoiceInputActivity : ComponentActivity() {
                 Text(
                     text = "✕",
                     style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.error
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
                 )
             }
-        }
-    }
-
-    @Composable
-    fun VoiceCommandHint() {
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer
-            ),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = "💡 Voice Commands: \"Make it shorter\", \"Change subject to...\", \"Send this email\"",
-                modifier = Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
         }
     }
 
@@ -474,7 +442,7 @@ class VoiceInputActivity : ComponentActivity() {
     ) {
         Column(
             modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp) // Reduced spacing
         ) {
             // To Field
             EmailDisplayField(
@@ -490,7 +458,7 @@ class VoiceInputActivity : ComponentActivity() {
                 placeholder = "Subject will appear here"
             )
 
-            // Body Field with scroll
+            // Body Field with scroll - takes remaining space
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Body",
@@ -508,7 +476,7 @@ class VoiceInputActivity : ComponentActivity() {
                     ),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,
-                        MaterialTheme.colorScheme.outline
+                        MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
                     ),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -516,13 +484,12 @@ class VoiceInputActivity : ComponentActivity() {
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(12.dp),
-                        contentAlignment = Alignment.Center // ✅ Add contentAlignment here
+                        contentAlignment = Alignment.Center
                     ) {
                         if (isLoading && draft.body.isNullOrBlank()) {
-                            // Show loading in body area - Remove the inner Box
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center // ✅ Add vertical centering
+                                verticalArrangement = Arrangement.Center
                             ) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(24.dp),
@@ -536,7 +503,6 @@ class VoiceInputActivity : ComponentActivity() {
                                 )
                             }
                         } else {
-                            // Scrollable text content
                             val scrollState = rememberScrollState()
 
                             Text(
@@ -591,7 +557,7 @@ class VoiceInputActivity : ComponentActivity() {
                     },
                     colors = OutlinedTextFieldDefaults.colors(
                         disabledTextColor = MaterialTheme.colorScheme.onSurface,
-                        disabledBorderColor = MaterialTheme.colorScheme.outline,
+                        disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
                         disabledPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     ),
                     shape = RoundedCornerShape(8.dp),
@@ -615,10 +581,13 @@ class VoiceInputActivity : ComponentActivity() {
                 onClick = onDismiss,
                 enabled = !isLoading
             ) {
-                Text("Cancel")
+                Text("Cancel", color = Color(0xFF6A78C2))
             }
 
-            Button(
+            Button(colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF6A78C2),
+                contentColor = Color.White
+            ),
                 onClick = {
                     currentDraft?.draft_id?.let(onSend)
                 },
@@ -635,7 +604,7 @@ class VoiceInputActivity : ComponentActivity() {
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
+                            color = Color(0xFF6A78C2)
                         )
                         Text("Processing...")
                     }
