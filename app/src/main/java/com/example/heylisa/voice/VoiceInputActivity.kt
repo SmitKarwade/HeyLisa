@@ -1,5 +1,6 @@
 package com.example.heylisa.voice
 
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -127,6 +128,7 @@ class VoiceInputActivity : ComponentActivity() {
         }
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun registerBroadcastReceivers() {
         val partialFilter = IntentFilter().apply {
@@ -134,7 +136,6 @@ class VoiceInputActivity : ComponentActivity() {
             addAction("com.example.heylisa.CLEAR_TEXT")
             addAction("com.example.heylisa.RECOGNIZED_TEXT")
         }
-        registerReceiver(partialReceiver, partialFilter, RECEIVER_EXPORTED)
 
         val stateFilter = IntentFilter().apply {
             addAction("com.example.heylisa.STATE_UPDATE")
@@ -143,7 +144,15 @@ class VoiceInputActivity : ComponentActivity() {
             addAction("com.example.heylisa.TTS_FINISHED")
             addAction("com.example.heylisa.TTS_ERROR")
         }
-        registerReceiver(stateReceiver, stateFilter, RECEIVER_EXPORTED)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(partialReceiver, partialFilter, RECEIVER_EXPORTED)
+            registerReceiver(stateReceiver, stateFilter, RECEIVER_EXPORTED)
+        } else {
+            // Android 11-12 compatible registration
+            registerReceiver(partialReceiver, partialFilter)
+            registerReceiver(stateReceiver, stateFilter)
+        }
     }
 
     @Composable
@@ -651,7 +660,13 @@ class VoiceInputActivity : ComponentActivity() {
 
     private fun setupWindow() {
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
-        window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        } else {
+            // Fallback for older versions (though we're targeting 11+)
+            @Suppress("DEPRECATION")
+            window.setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT)
+        }
         window.addFlags(
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -666,13 +681,33 @@ class VoiceInputActivity : ComponentActivity() {
         Log.d("VoiceInputActivity", "Toast: $message")
     }
 
+    // Add this to prevent memory leaks
+    override fun onStop() {
+        super.onStop()
+        // Clear any temporary states
+        partialText.value = ""
+        finalText.value = ""
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {
             unregisterReceiver(partialReceiver)
+        } catch (e: IllegalArgumentException) {
+            Log.w("VoiceInputActivity", "partialReceiver not registered: ${e.message}")
+        }
+
+        try {
             unregisterReceiver(stateReceiver)
         } catch (e: IllegalArgumentException) {
-            Log.w("VoiceInputActivity", "Receiver not registered: ${e.message}")
+            Log.w("VoiceInputActivity", "stateReceiver not registered: ${e.message}")
+        }
+
+        // ✅ Send restore wake word signal when activity is destroyed
+        try {
+            sendBroadcast(Intent("com.example.heylisa.RESTORE_WAKE_WORD"))
+        } catch (e: Exception) {
+            Log.w("VoiceInputActivity", "Failed to send restore signal: ${e.message}")
         }
     }
 }

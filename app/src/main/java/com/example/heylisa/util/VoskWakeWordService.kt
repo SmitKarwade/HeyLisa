@@ -1,6 +1,7 @@
 package com.example.heylisa.util
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -15,9 +16,11 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
@@ -145,6 +148,8 @@ class VoskWakeWordService : Service() {
         return START_STICKY
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
     override fun onCreate() {
         super.onCreate()
 
@@ -157,15 +162,20 @@ class VoskWakeWordService : Service() {
             addAction("com.example.heylisa.PROCESSING_COMPLETE")
             addAction("com.example.heylisa.RESTORE_WAKE_WORD")
         }
-        registerReceiver(stateReceiver, stateFilter, RECEIVER_EXPORTED)
-
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(stateReceiver, stateFilter, RECEIVER_EXPORTED)
+        } else {
+            // Android 11-12 compatible registration
+            registerReceiver(stateReceiver, stateFilter)
+        }
+        checkBatteryOptimization()
         createNotificationChannel()
         createWakeWordAlertChannel()
         startForeground(1, createNotification("Hey Lisa is listening..."))
 
         serviceScope.launch {
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                Log.e("HeyLisa", "Microphone permission not granted")
+            if (!checkPermissions()) {
+                Log.e("HeyLisa", "Required permissions not granted")
                 stopSelfSafely()
                 return@launch
             }
@@ -699,6 +709,19 @@ class VoskWakeWordService : Service() {
         stopSelf()
     }
 
+    private fun checkPermissions(): Boolean {
+        val audioPermission = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+        // Check notification permission for Android 13+
+        val notificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true // Not required for Android 11-12
+        }
+
+        return audioPermission && notificationPermission
+    }
+
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun restartAudioRecordAndRecognizer() {
         try {
@@ -773,6 +796,7 @@ class VoskWakeWordService : Service() {
             .setSilent(true)
             .setSmallIcon(R.drawable.mic)
             .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
@@ -796,6 +820,8 @@ class VoskWakeWordService : Service() {
             enableVibration(true)
             setShowBadge(true)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            setBypassDnd(false)
+            setSound(null, null)
         }
 
         val manager = getSystemService(NotificationManager::class.java)
@@ -849,6 +875,21 @@ class VoskWakeWordService : Service() {
         }
         return false
     }
+
+    // Add this method to handle battery optimization
+    private fun isBatteryOptimizationIgnored(): Boolean {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return powerManager.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun checkBatteryOptimization() {
+        if (!isBatteryOptimizationIgnored()) {
+            Log.w("HeyLisa", "App is not whitelisted from battery optimization - service may be killed")
+            Toast.makeText(this, "App is not whitelisted from battery optimization - service may be killed", Toast.LENGTH_LONG).show()
+        }
+    }
+
+
 
     override fun onDestroy() {
         isShuttingDown = true

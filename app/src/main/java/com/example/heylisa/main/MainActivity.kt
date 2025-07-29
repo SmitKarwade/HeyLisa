@@ -2,6 +2,7 @@ package com.example.heylisa.main
 
 import android.Manifest.permission.POST_NOTIFICATIONS
 import android.Manifest.permission.RECORD_AUDIO
+import android.annotation.SuppressLint
 import android.app.DownloadManager
 import android.app.role.RoleManager
 import android.content.*
@@ -49,7 +50,6 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var googleSignInClient: GoogleSignInClient // Add GoogleSignInClient
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -58,7 +58,6 @@ class MainActivity : ComponentActivity() {
         else Toast.makeText(this, "Microphone permission is required.", Toast.LENGTH_LONG).show()
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -78,7 +77,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -117,7 +115,6 @@ class MainActivity : ComponentActivity() {
         }, 500)
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun checkAndRequestPermission() {
         if (checkSelfPermission(RECORD_AUDIO) != PERMISSION_GRANTED) {
             requestPermissionLauncher.launch(RECORD_AUDIO)
@@ -127,17 +124,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun checkNotificationPermission() {
-        if (checkSelfPermission(POST_NOTIFICATIONS) != PERMISSION_GRANTED) {
-            requestNotificationPermissionLauncher.launch(POST_NOTIFICATIONS)
+        // Only request notification permission on Android 13+ (API 33)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(POST_NOTIFICATIONS) != PERMISSION_GRANTED) {
+                requestNotificationPermissionLauncher.launch(POST_NOTIFICATIONS)
+            } else {
+                isNotificationPermissionGranted = true
+                handleModelSetup()
+            }
         } else {
+            // Android 11-12 don't need runtime notification permission
             isNotificationPermissionGranted = true
             handleModelSetup()
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun handleModelSetup() {
         val modelDir = File(filesDir, "vosk-model")
         val modelZip = File(getExternalFilesDir(null), "vosk-model-en-us-0.22.zip")
@@ -149,7 +151,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     fun modelDownload(context: Context) {
         val modelUrl = "https://github.com/SmitKarwade/VoskModel/releases/download/v1.0/vosk-model-en-us-0.22.zip"
         val fileName = "vosk-model-en-us-0.22.zip"
@@ -209,7 +211,13 @@ class MainActivity : ComponentActivity() {
             }
 
             if (!isReceiverRegistered) {
-                registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), RECEIVER_EXPORTED)
+                // Use appropriate flag based on Android version
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), RECEIVER_EXPORTED)
+                } else {
+                    // Android 11-12 use the older method
+                    registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE))
+                }
                 isReceiverRegistered = true
             }
         }
