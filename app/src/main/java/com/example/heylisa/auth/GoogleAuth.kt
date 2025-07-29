@@ -236,6 +236,7 @@ fun getGoogleSignInClient(context: android.content.Context): GoogleSignInClient 
             Scope("https://www.googleapis.com/auth/userinfo.email"),
             Scope("https://www.googleapis.com/auth/userinfo.profile"),
             Scope("https://www.googleapis.com/auth/gmail.send"),
+            Scope("https://www.googleapis.com/auth/contacts.readonly"),
             Scope("openid")
         )
         .build()
