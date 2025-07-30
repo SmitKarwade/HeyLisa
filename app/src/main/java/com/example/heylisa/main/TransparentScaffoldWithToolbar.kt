@@ -7,7 +7,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -28,12 +27,18 @@ import com.example.heylisa.R
 import com.example.heylisa.util.VoskWakeWordService
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import kotlinx.coroutines.launch
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransparentScaffoldWithToolbar(
     context: Context,
     googleSignInClient: GoogleSignInClient,
+    isModelInitializing: Boolean,
     onSignOut: () -> Unit,
     onNavigateToSettings: () -> Unit = {} // Add navigation callback
 ) {
@@ -227,6 +232,17 @@ fun TransparentScaffoldWithToolbar(
                             fontFamily = cstFont,
                             color = Color.White
                         )
+
+//                        if (isModelInitializing) {
+//                            Box(
+//                                modifier = Modifier
+//                                    .matchParentSize()
+//                                    .background(Color.Black.copy(alpha = 0.5f)),
+//                                contentAlignment = Alignment.Center
+//                            ) {
+//                                PulsingLoadingDots()
+//                            }
+//                        }
                     }
                 }
             )
@@ -279,6 +295,62 @@ fun SettingsScreen(
         }
     }
 }
+
+
+
+@Composable
+fun PulsingLoadingDots(
+    modifier: Modifier = Modifier,
+    dotColor: Color = MaterialTheme.colorScheme.primary,
+    dotsCount: Int = 3,
+    dotSize: Dp = 16.dp,
+    spaceBetween: Dp = 12.dp,
+    animationDuration: Int = 1200
+) {
+    val infiniteTransition = rememberInfiniteTransition()
+
+    Box(modifier = modifier.wrapContentWidth().wrapContentHeight()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(spaceBetween)
+        ) {
+            for (i in 0 until dotsCount) {
+                // Each dot animated independently with offset delay
+                val scale by infiniteTransition.animateFloat(
+                    initialValue = 0.5f,
+                    targetValue = 1.3f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = animationDuration, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse,
+                        initialStartOffset = StartOffset(i * (animationDuration / dotsCount))
+                    )
+                )
+
+                val alpha by infiniteTransition.animateFloat( // <-- use val and by, not var
+                    initialValue = 0.3f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = animationDuration, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse,
+                        initialStartOffset = StartOffset(i * (animationDuration / dotsCount))
+                    )
+                )
+
+                Canvas(
+                    modifier = Modifier
+                        .size(dotSize)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            this.alpha = alpha
+                        }
+                ) {
+                    drawCircle(color = dotColor)
+                }
+            }
+        }
+    }
+}
+
 
 @Composable
 fun ModelDownloadDialog(show: Boolean, progress: Float, isUnzipping: Boolean) {

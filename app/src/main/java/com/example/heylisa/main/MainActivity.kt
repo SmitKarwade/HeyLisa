@@ -19,11 +19,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -49,6 +51,8 @@ class MainActivity : ComponentActivity() {
     private var isLoggedIn by mutableStateOf(false) // Track login state
 
     private lateinit var googleSignInClient: GoogleSignInClient // Add GoogleSignInClient
+
+    private var isModelInitializing by mutableStateOf(false)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -77,10 +81,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val modelInitReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "com.example.heylisa.MODEL_INIT_STARTED" -> {
+                    isModelInitializing = true
+                }
+                "com.example.heylisa.MODEL_INIT_FINISHED", "com.example.heylisa.MODEL_INIT_FAILED" -> {
+                    isModelInitializing = false
+                }
+            }
+        }
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
+
+        val filter = IntentFilter().apply {
+            addAction("com.example.heylisa.MODEL_INIT_STARTED")
+            addAction("com.example.heylisa.MODEL_INIT_FINISHED")
+            addAction("com.example.heylisa.MODEL_INIT_FAILED")
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(modelInitReceiver, filter, RECEIVER_EXPORTED)
+        } else {
+            // Android 11-12 compatible registration
+            registerReceiver(modelInitReceiver, filter)
+        }
 
         val email = intent.getStringExtra("email")
         if (email != null) {
@@ -104,7 +134,8 @@ class MainActivity : ComponentActivity() {
                         onDismissDialog = { showConfirmationDialog = false },
                         onStartDownload = { modelDownload(this) },
                         googleSignInClient = googleSignInClient,
-                        onSignOut = { signOut() }
+                        onSignOut = { signOut() },
+                        isModelInitializing = isModelInitializing
                     )
                 }
             }
@@ -332,6 +363,11 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         maybeStartServiceIfReady()
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(modelInitReceiver)
+    }
 }
 
 @Composable
@@ -344,7 +380,8 @@ fun MainScreen(
     onDismissDialog: () -> Unit,
     onStartDownload: () -> Unit,
     googleSignInClient: GoogleSignInClient,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    isModelInitializing: Boolean
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         var currentScreen by remember { mutableStateOf("main") }
@@ -355,6 +392,7 @@ fun MainScreen(
                 TransparentScaffoldWithToolbar(
                     context = context,
                     googleSignInClient = googleSignInClient,
+                    isModelInitializing = isModelInitializing,
                     onSignOut = onSignOut,
                     onNavigateToSettings = { currentScreen = "settings" }
                 )
@@ -394,6 +432,17 @@ fun MainScreen(
                     }
                 }
             )
+        }
+
+        if (isModelInitializing) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                PulsingLoadingDots()
+            }
         }
 
 //        WakeWordServiceControl(

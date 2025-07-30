@@ -179,12 +179,16 @@ class VoskWakeWordService : Service() {
                 stopSelfSafely()
                 return@launch
             }
-
+            sendBroadcast(Intent("com.example.heylisa.MODEL_INIT_STARTED"))
             try {
                 initModel()
+                sendBroadcast(Intent("com.example.heylisa.MODEL_INIT_FINISHED"))
                 startWakeWordDetection()
             } catch (e: Exception) {
                 Log.e("HeyLisa", "Model init failed", e)
+                sendBroadcast(Intent("com.example.heylisa.MODEL_INIT_FAILED").apply {
+                    putExtra("error", e.message)
+                })
                 stopSelfSafely()
             }
         }
