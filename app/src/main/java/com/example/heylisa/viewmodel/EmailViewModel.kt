@@ -50,6 +50,7 @@ class EmailViewModel(
     }
 
     private fun speak(text: String) {
+        cloudttsService.stop()
         cloudttsService.speak(text)
     }
 
@@ -335,12 +336,14 @@ class EmailViewModel(
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
                             isProcessingBackend = false,
+                            isDraftCreated = false,
+                            currentDraft = null,
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
-
                         speak(errorMessage)
                         Log.e("EmailViewModel", "❌ Draft creation failed: ${result.message}")
                     }
+
                 }
             }
         }
@@ -464,6 +467,12 @@ class EmailViewModel(
     fun onNavigationHandled() {
         _uiState.value = _uiState.value.copy(navigationEvent = null)
     }
+
+    fun stopTts() {
+        cloudttsService.stop()
+    }
+
+
 
     // Getters
     fun getDraftTo(): String? = _uiState.value.currentDraft?.to

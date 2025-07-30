@@ -161,20 +161,19 @@ class VoiceInputActivity : ComponentActivity() {
         val emailViewModel: EmailViewModel = viewModel(
             factory = EmailViewModelFactory(context.applicationContext)
         )
-        var showEmailCompose by remember { mutableStateOf(false) }
-        val uiState by emailViewModel.uiState.collectAsState()
 
-        // Handle navigation events from ViewModel
+        val uiState by emailViewModel.uiState.collectAsState()
+        val showEmailCompose = uiState.isDraftCreated && uiState.currentDraft != null
+
         LaunchedEffect(uiState.navigationEvent) {
             uiState.navigationEvent?.let { event ->
-                handleNavigationEvent(event) { shouldShowCompose ->
-                    showEmailCompose = shouldShowCompose
+                handleNavigationEvent(event) {
+                    // No local state change here since showEmailCompose derives from uiState
                 }
                 emailViewModel.onNavigationHandled()
             }
         }
 
-        // Process voice input - MODIFIED to only process when not TTS speaking
         LaunchedEffect(finalText.value, isTtsSpeaking.value) {
             val text = finalText.value.trim()
             if (text.isNotEmpty() && !isTtsSpeaking.value) {
@@ -184,39 +183,40 @@ class VoiceInputActivity : ComponentActivity() {
             }
         }
 
-        // Main UI Layout - MODIFIED to respect system UI
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Transparent)
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            if (showEmailCompose) {
-                EmailComposeScreen(
-                    onDismiss = {
-                        showEmailCompose = false
-                        emailViewModel.clearDraft()
-                    },
-                    emailViewModel = emailViewModel,
-                    modifier = Modifier.weight(1f) // Takes remaining space
-                )
-            } else {
-                // Empty space when compose is not shown - clickable to close
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .clickable { finish() }
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                if (showEmailCompose) {
+                    EmailComposeScreen(
+                        onDismiss = {
+                            emailViewModel.stopTts()
+                            emailViewModel.clearDraft()
+                        },
+                        emailViewModel = emailViewModel,
+                        modifier = Modifier.weight(1f) // Takes remaining space
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .clickable { finish() }
+                    )
+                }
+
+                VoiceInputBar(
+                    emailViewModel = emailViewModel
                 )
             }
 
-            // Voice Input Bar - always at bottom with fixed height
-            VoiceInputBar(
-                emailViewModel = emailViewModel
-            )
-
-            // Loading Overlay - Only show when not in compose mode
+            // Loading overlay displayed over the whole Column, centered, but only when not composing email
             if (uiState.isLoading && !showEmailCompose) {
                 LoadingOverlay()
             }
@@ -630,7 +630,6 @@ class VoiceInputActivity : ComponentActivity() {
     ) {
         when (event) {
             EmailViewModel.NavigationEvent.ToComposer -> {
-                onShowComposeChange(true)
                 showToast("Opening email composer...")
             }
             EmailViewModel.NavigationEvent.ToInbox -> {
@@ -644,7 +643,6 @@ class VoiceInputActivity : ComponentActivity() {
             }
             EmailViewModel.NavigationEvent.SendEmail -> {
                 showToast("Email sent successfully!")
-                onShowComposeChange(false)
             }
             EmailViewModel.NavigationEvent.ToChat -> {
                 showToast("I didn't understand that. Try: 'send email to [person]' or 'draft email about [topic]'")
