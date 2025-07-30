@@ -889,7 +889,7 @@ class VoskWakeWordService : Service() {
     private fun checkBatteryOptimization() {
         if (!isBatteryOptimizationIgnored()) {
             Log.w("HeyLisa", "App is not whitelisted from battery optimization - service may be killed")
-            Toast.makeText(this, "App is not whitelisted from battery optimization - service may be killed", Toast.LENGTH_LONG).show()
+            //Toast.makeText(this, "App is not whitelisted from battery optimization - service may be killed", Toast.LENGTH_LONG).show()
         }
     }
 

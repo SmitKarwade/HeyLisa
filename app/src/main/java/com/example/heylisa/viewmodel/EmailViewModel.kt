@@ -332,7 +332,7 @@ class EmailViewModel(
                         // Processing complete will be sent after TTS finishes
                     }
                     is DraftResult.Error -> {
-                        val errorMessage = "Failed to create draft: ${result.message}"
+                        val errorMessage = "Failed to create draft"
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
                             isProcessingBackend = false,
