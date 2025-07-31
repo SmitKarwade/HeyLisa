@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.heylisa.R
+import com.example.heylisa.constant.Const
 import com.example.heylisa.viewmodel.AuthViewModel
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
@@ -228,9 +229,9 @@ fun GradientCircularProgressIndicator(
 
 fun getGoogleSignInClient(context: android.content.Context): GoogleSignInClient {
     val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-        .requestIdToken("643617418308-66gtgeohdts3fv1844jfu7sf80j4q5sn.apps.googleusercontent.com") // Web Client ID
+        .requestIdToken(Const.CLIENT_ID) // Web Client ID
         .requestEmail()
-        .requestServerAuthCode("643617418308-66gtgeohdts3fv1844jfu7sf80j4q5sn.apps.googleusercontent.com")
+        .requestServerAuthCode(Const.CLIENT_ID)
         .requestScopes(
             Scope("https://www.googleapis.com/auth/gmail.readonly"),
             Scope("https://www.googleapis.com/auth/userinfo.email"),

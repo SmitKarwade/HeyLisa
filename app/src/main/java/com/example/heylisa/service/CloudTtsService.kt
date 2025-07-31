@@ -43,7 +43,7 @@ class CloudTtsService(
 
                 // Check if credentials file exists
                 val credentialsStream: InputStream = try {
-                    context.assets.open("heylisa-tts-credentials.json")
+                    context.assets.open("heylisa_tts_service.json")
                 } catch (e: Exception) {
                     Log.e("CloudTtsService", "❌ Credentials file not found in assets!", e)
                     throw e
