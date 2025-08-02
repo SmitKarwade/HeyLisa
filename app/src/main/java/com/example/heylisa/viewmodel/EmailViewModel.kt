@@ -12,7 +12,6 @@ import com.example.heylisa.repository.EmailRepository
 import com.example.heylisa.request.ConfirmSendResponse
 import com.example.heylisa.request.DraftResponse
 import com.example.heylisa.request.InboxResponse
-import com.example.heylisa.service.CloudTtsService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -23,36 +22,6 @@ class EmailViewModel(
 ) : ViewModel() {
 
     private var isFirstDraftCreation = true
-    private val cloudttsService: CloudTtsService
-
-    private val ttsStateReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                CloudTtsService.TTS_FINISHED, CloudTtsService.TTS_ERROR -> {
-                    // Send processing complete after TTS finishes
-                    Log.d("EmailViewModel", "📤 TTS finished - sending processing complete")
-                    notifyProcessingComplete()
-                }
-            }
-        }
-    }
-
-    init {
-        cloudttsService = CloudTtsService(context.applicationContext) {
-            Log.d("EmailViewModel", "TTS Service is ready from ViewModel.")
-        }
-
-        val ttsFilter = IntentFilter().apply {
-            addAction(CloudTtsService.TTS_FINISHED)
-            addAction(CloudTtsService.TTS_ERROR)
-        }
-        context.registerReceiver(ttsStateReceiver, ttsFilter, Context.RECEIVER_EXPORTED)
-    }
-
-    private fun speak(text: String) {
-        cloudttsService.stop()
-        cloudttsService.speak(text)
-    }
 
     // Helper functions to send broadcasts to the service
     private fun notifyProcessingStarted() {
@@ -63,17 +32,6 @@ class EmailViewModel(
     private fun notifyProcessingComplete() {
         Log.d("EmailViewModel", "📤 Sending PROCESSING_COMPLETE broadcast")
         context.sendBroadcast(Intent("com.example.heylisa.PROCESSING_COMPLETE"))
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        try {
-            context.unregisterReceiver(ttsStateReceiver)
-        } catch (e: IllegalArgumentException) {
-            Log.w("EmailViewModel", "TTS receiver not registered: ${e.message}")
-        }
-        cloudttsService.shutdown()
-        Log.d("EmailViewModel", "ViewModel cleared, TTS shutdown.")
     }
 
 
@@ -152,7 +110,7 @@ class EmailViewModel(
                             isLoading = false,
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
-                        speak(errorMessage)
+                        //speak(errorMessage)
                     }
                 }
             }
@@ -198,7 +156,7 @@ class EmailViewModel(
                         _uiState.value = _uiState.value.copy(
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
-                        speak(errorMessage)
+                        //speak(errorMessage)
                     }
                 }
             }
@@ -222,7 +180,7 @@ class EmailViewModel(
             _uiState.value = _uiState.value.copy(
                 navigationEvent = NavigationEvent.ShowError(errorMessage)
             )
-            speak(errorMessage)
+            //speak(errorMessage)
         }
     }
 
@@ -236,7 +194,7 @@ class EmailViewModel(
                 _uiState.value = _uiState.value.copy(
                     navigationEvent = NavigationEvent.ShowError(errorMessage)
                 )
-                speak(errorMessage)
+                //speak(errorMessage)
                 return
             }
             sendEmail(context, currentDraft.draft_id)
@@ -245,7 +203,7 @@ class EmailViewModel(
             _uiState.value = _uiState.value.copy(
                 navigationEvent = NavigationEvent.ShowError(errorMessage)
             )
-            speak(errorMessage)
+            //speak(errorMessage)
         }
     }
 
@@ -282,7 +240,7 @@ class EmailViewModel(
                 _uiState.value = _uiState.value.copy(
                     navigationEvent = NavigationEvent.ShowError(errorMessage)
                 )
-                speak(errorMessage)
+                //speak(errorMessage)
                 notifyProcessingComplete()
             }
         }
@@ -326,7 +284,7 @@ class EmailViewModel(
                             "Draft created successfully"
                         }
 
-                        speak(textToSpeak)
+                        //speak(textToSpeak)
                         isFirstDraftCreation = false
 
                         // Processing complete will be sent after TTS finishes
@@ -340,7 +298,7 @@ class EmailViewModel(
                             currentDraft = null,
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
-                        speak(errorMessage)
+                        //speak(errorMessage)
                         Log.e("EmailViewModel", "❌ Draft creation failed: ${result.message}")
                     }
 
@@ -393,7 +351,7 @@ class EmailViewModel(
                             "Draft updated successfully"
                         }
 
-                        speak(textToSpeak)
+                        //speak(textToSpeak)
                         Log.d("EmailViewModel", "✅ Draft edited successfully")
                     }
                     is DraftResult.Error -> {
@@ -427,7 +385,7 @@ class EmailViewModel(
                             isDraftCreated = false
                         )
 
-                        speak("Email sent successfully")
+                        //speak("Email sent successfully")
                         Log.d("EmailViewModel", "✅ Email sent successfully")
 
                         // Processing complete will be sent after TTS finishes
@@ -440,7 +398,7 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
 
-                        speak(errorMessage)
+                        //speak(errorMessage)
                         Log.e("EmailViewModel", "❌ Email send failed: ${result.message}")
                     }
                 }
@@ -468,9 +426,6 @@ class EmailViewModel(
         _uiState.value = _uiState.value.copy(navigationEvent = null)
     }
 
-    fun stopTts() {
-        cloudttsService.stop()
-    }
 
 
 

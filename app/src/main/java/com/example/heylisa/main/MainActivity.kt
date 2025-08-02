@@ -3,7 +3,6 @@ package com.example.heylisa.main
 import android.Manifest.permission.POST_NOTIFICATIONS
 import android.Manifest.permission.RECORD_AUDIO
 import android.annotation.SuppressLint
-import android.app.DownloadManager
 import android.app.role.RoleManager
 import android.content.*
 import android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -28,7 +27,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.heylisa.auth.App
 import com.example.heylisa.ui.theme.HeyLisaTheme
@@ -38,20 +36,11 @@ import com.google.android.gms.auth.api.signin.GoogleSignInClient
 
 class MainActivity : ComponentActivity() {
 
-    private var modelDownloadId: Long = -1L
-    private var isReceiverRegistered = false
-
     private var isAudioPermissionGranted = false
     private var isNotificationPermissionGranted = false
 
-    private var showDialog by mutableStateOf(false)
-    private var progressState by mutableFloatStateOf(0f)
-    private var isUnzipping by mutableStateOf(false)
-    private var showConfirmationDialog by mutableStateOf(false)
     private var isLoggedIn by mutableStateOf(false) // Track login state
-
     private lateinit var googleSignInClient: GoogleSignInClient // Add GoogleSignInClient
-
     private var isModelInitializing by mutableStateOf(false)
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -67,7 +56,7 @@ class MainActivity : ComponentActivity() {
     ) { isGranted ->
         isNotificationPermissionGranted = isGranted
         if (!isGranted) Toast.makeText(this, "Notification permission is required.", Toast.LENGTH_LONG).show()
-        if (isAudioPermissionGranted && isGranted) handleModelSetup()
+        if (isAudioPermissionGranted && isGranted) handleSetup()
     }
 
     private val assistantRoleLauncher = registerForActivityResult(
@@ -81,14 +70,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Model initialization receiver - keeps the loading animation
     private val modelInitReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 "com.example.heylisa.MODEL_INIT_STARTED" -> {
+                    Log.d("MainActivity", "📦 Model initialization started")
                     isModelInitializing = true
                 }
-                "com.example.heylisa.MODEL_INIT_FINISHED", "com.example.heylisa.MODEL_INIT_FAILED" -> {
+                "com.example.heylisa.MODEL_INIT_FINISHED" -> {
+                    Log.d("MainActivity", "✅ Model initialization finished")
                     isModelInitializing = false
+                }
+                "com.example.heylisa.MODEL_INIT_FAILED" -> {
+                    Log.d("MainActivity", "❌ Model initialization failed")
+                    isModelInitializing = false
+                    Toast.makeText(this@MainActivity, "Model initialization failed", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -100,6 +97,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
 
+        // Register model initialization receiver
         val filter = IntentFilter().apply {
             addAction("com.example.heylisa.MODEL_INIT_STARTED")
             addAction("com.example.heylisa.MODEL_INIT_FINISHED")
@@ -108,7 +106,6 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(modelInitReceiver, filter, RECEIVER_EXPORTED)
         } else {
-            // Android 11-12 compatible registration
             registerReceiver(modelInitReceiver, filter)
         }
 
@@ -127,12 +124,6 @@ class MainActivity : ComponentActivity() {
                 } else {
                     MainScreen(
                         context = this,
-                        showDialog = showDialog,
-                        progressState = progressState,
-                        isUnzipping = isUnzipping,
-                        showConfirmationDialog = showConfirmationDialog,
-                        onDismissDialog = { showConfirmationDialog = false },
-                        onStartDownload = { modelDownload(this) },
                         googleSignInClient = googleSignInClient,
                         onSignOut = { signOut() },
                         isModelInitializing = isModelInitializing
@@ -162,119 +153,20 @@ class MainActivity : ComponentActivity() {
                 requestNotificationPermissionLauncher.launch(POST_NOTIFICATIONS)
             } else {
                 isNotificationPermissionGranted = true
-                handleModelSetup()
+                handleSetup()
             }
         } else {
             // Android 11-12 don't need runtime notification permission
             isNotificationPermissionGranted = true
-            handleModelSetup()
+            handleSetup()
         }
     }
 
-    private fun handleModelSetup() {
-        val modelDir = File(filesDir, "vosk-model")
-        val modelZip = File(getExternalFilesDir(null), "vosk-model-en-us-0.22.zip")
-
-        when {
-            modelDir.exists() && modelDir.listFiles()?.isNotEmpty() == true -> {}
-            modelZip.exists() -> unzipAndTrack(modelZip)
-            else -> showConfirmationDialog = true
-        }
-    }
-
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
-    fun modelDownload(context: Context) {
-        val modelUrl = "https://github.com/SmitKarwade/VoskModel/releases/download/v1.0/vosk-model-en-us-0.22.zip"
-        val fileName = "vosk-model-en-us-0.22.zip"
-        val destination = File(context.getExternalFilesDir(null), fileName)
-
-        if (!destination.exists()) {
-            val request = DownloadManager.Request(modelUrl.toUri()).apply {
-                setTitle("Downloading Vosk Model")
-                setDescription("Please wait while we download the speech model.")
-                setDestinationUri(Uri.fromFile(destination))
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            }
-
-            val dm = context.getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            modelDownloadId = dm.enqueue(request)
-
-            showDialog = true
-            progressState = 0f
-            isUnzipping = false
-
-            val handler = Handler(Looper.getMainLooper())
-            handler.post(object : Runnable {
-                override fun run() {
-                    val query = DownloadManager.Query().setFilterById(modelDownloadId)
-                    val cursor = dm.query(query)
-                    if (cursor != null && cursor.moveToFirst()) {
-                        val totalBytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                        val downloadedBytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                        if (totalBytes > 0) progressState = downloadedBytes.toFloat() / totalBytes
-
-                        when (cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))) {
-                            DownloadManager.STATUS_SUCCESSFUL -> handler.removeCallbacks(this)
-                            DownloadManager.STATUS_FAILED -> {
-                                Toast.makeText(context, "Download failed", Toast.LENGTH_LONG).show()
-                                showDialog = false
-                                handler.removeCallbacks(this)
-                            }
-                            else -> handler.postDelayed(this, 500)
-                        }
-                    }
-                    cursor?.close()
-                }
-            })
-
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context?, intent: Intent?) {
-                    val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                    if (id == modelDownloadId) {
-                        isReceiverRegistered = false
-                        Log.d("HeyLisa", "Model download complete, starting unzip...")
-                        unzipAndTrack(destination)
-                    }
-                    try {
-                        unregisterReceiver(this)
-                    } catch (_: IllegalArgumentException) {}
-                }
-            }
-
-            if (!isReceiverRegistered) {
-                // Use appropriate flag based on Android version
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), RECEIVER_EXPORTED)
-                } else {
-                    // Android 11-12 use the older method
-                    registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE))
-                }
-                isReceiverRegistered = true
-            }
-        }
-    }
-
-    private fun unzipAndTrack(zipFile: File) {
-        isUnzipping = true
-        progressState = 0.01f
-
-        unzipModel(
-            context = this,
-            zipFile = zipFile,
-            onProgress = {
-                showDialog = true
-                progressState = it
-            },
-            onDone = {
-                showDialog = false
-                val prefs = getSharedPreferences("setup_state", Context.MODE_PRIVATE)
-                prefs.edit().putBoolean("setup_done", true).apply()
-
-                requestAllDefaultAssistantRequirements()
-
-                maybeStartServiceIfReady()
-            }
-        )
+    // Simplified setup - no model download/unzip needed
+    private fun handleSetup() {
+        Log.d("MainActivity", "🚀 Handling setup - requesting permissions")
+        requestAllDefaultAssistantRequirements()
+        maybeStartServiceIfReady()
     }
 
     private fun allRequirementsMet(): Boolean {
@@ -285,10 +177,11 @@ class MainActivity : ComponentActivity() {
         Log.d("HeyLisa", "Voice Service: $voiceService")
         val isVoiceService = voiceService?.contains("com.example.heylisa/.custom.LisaVoiceInteractionService") == true
         Log.d("HeyLisa", "Assistant: $isAssistant, Can Draw: $canDraw, Logged in: $isLoggedIn")
-        return isAssistant && canDraw && isLoggedIn
+        return isAssistant && canDraw && isLoggedIn && isAudioPermissionGranted && isNotificationPermissionGranted
     }
 
     private fun startWakeWordService() {
+        Log.d("MainActivity", "🎤 Starting VoskWakeWordService")
         val serviceIntent = Intent(this, VoskWakeWordService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent)
@@ -304,9 +197,10 @@ class MainActivity : ComponentActivity() {
 
     private fun maybeStartServiceIfReady() {
         if (allRequirementsMet()) {
+            Log.d("MainActivity", "✅ All requirements met - starting wake word service")
             startWakeWordService()
         } else {
-            Log.d("Setup", "Lisa is not ready yet. Complete all setup steps.")
+            Log.d("Setup", "⚠️ Lisa is not ready yet. Complete all setup steps.")
         }
     }
 
@@ -366,19 +260,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        unregisterReceiver(modelInitReceiver)
+        try {
+            unregisterReceiver(modelInitReceiver)
+        } catch (e: IllegalArgumentException) {
+            Log.w("MainActivity", "Model init receiver not registered: ${e.message}")
+        }
     }
 }
 
 @Composable
 fun MainScreen(
     context: Context,
-    showDialog: Boolean,
-    progressState: Float,
-    isUnzipping: Boolean,
-    showConfirmationDialog: Boolean,
-    onDismissDialog: () -> Unit,
-    onStartDownload: () -> Unit,
     googleSignInClient: GoogleSignInClient,
     onSignOut: () -> Unit,
     isModelInitializing: Boolean
@@ -404,36 +296,7 @@ fun MainScreen(
             }
         }
 
-        ModelDownloadDialog(
-            show = showDialog,
-            progress = progressState,
-            isUnzipping = isUnzipping
-        )
-
-        if (showConfirmationDialog) {
-            AlertDialog(
-                onDismissRequest = onDismissDialog,
-                title = { Text("Download Required") },
-                text = { Text("The Vosk model (~1.8 GB) is required to enable offline voice assistant features. Do you want to download it now?") },
-                confirmButton = {
-                    TextButton(onClick = {
-                        onDismissDialog()
-                        onStartDownload()
-                    }) {
-                        Text("Yes")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        onDismissDialog()
-                        Toast.makeText(context, "Model download is required to proceed.", Toast.LENGTH_LONG).show()
-                    }) {
-                        Text("No")
-                    }
-                }
-            )
-        }
-
+        // Model initialization loading overlay
         if (isModelInitializing) {
             Box(
                 modifier = Modifier
@@ -441,15 +304,13 @@ fun MainScreen(
                     .background(Color.Black.copy(alpha = 0.5f)),
                 contentAlignment = Alignment.Center
             ) {
-                PulsingLoadingDots()
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    PulsingLoadingDots()
+                }
             }
         }
-
-//        WakeWordServiceControl(
-//            context = context,
-//            modifier = Modifier
-//                .align(Alignment.BottomCenter)
-//                .padding(24.dp)
-//        )
     }
 }

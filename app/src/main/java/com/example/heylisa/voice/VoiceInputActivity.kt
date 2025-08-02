@@ -196,7 +196,6 @@ class VoiceInputActivity : ComponentActivity() {
                 if (showEmailCompose) {
                     EmailComposeScreen(
                         onDismiss = {
-                            emailViewModel.stopTts()
                             emailViewModel.clearDraft()
                         },
                         emailViewModel = emailViewModel,
