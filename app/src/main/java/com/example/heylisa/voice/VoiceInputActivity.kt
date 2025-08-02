@@ -630,28 +630,28 @@ class VoiceInputActivity : ComponentActivity() {
     ) {
         when (event) {
             EmailViewModel.NavigationEvent.ToComposer -> {
-                showToast("Opening email composer...")
+                //showToast("Opening email composer...")
             }
             EmailViewModel.NavigationEvent.ToInbox -> {
-                showToast("Opening inbox...")
+                //showToast("Opening inbox...")
             }
             EmailViewModel.NavigationEvent.ToDrafts -> {
-                showToast("Opening drafts...")
+                //showToast("Opening drafts...")
             }
             EmailViewModel.NavigationEvent.ToSent -> {
-                showToast("Opening sent mail...")
+                //showToast("Opening sent mail...")
             }
             EmailViewModel.NavigationEvent.SendEmail -> {
-                showToast("Email sent successfully!")
+                //showToast("Email sent successfully!")
             }
             EmailViewModel.NavigationEvent.ToChat -> {
-                showToast("I didn't understand that. Try: 'send email to [person]' or 'draft email about [topic]'")
+                //showToast("I didn't understand that. Try: 'send email to [person]' or 'draft email about [topic]'")
             }
             is EmailViewModel.NavigationEvent.ShowError -> {
-                showToast(event.message)
+                //showToast(event.message)
             }
             is EmailViewModel.NavigationEvent.ShowSuccess -> {
-                showToast(event.message)
+                //showToast(event.message)
             }
         }
     }

@@ -395,13 +395,13 @@ class VoskWakeWordService : Service() {
                                         if (validateWakeWordWithFinalResult()) {
                                             Log.i("HeyLisa", "✅ Wake word CONFIRMED!")
 
-                                            withContext(Dispatchers.Main) {
-                                                Toast.makeText(
-                                                    this@VoskWakeWordService,
-                                                    "Hey Lisa detected!",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
-                                            }
+//                                            withContext(Dispatchers.Main) {
+//                                                Toast.makeText(
+//                                                    this@VoskWakeWordService,
+//                                                    "Hey Lisa detected!",
+//                                                    Toast.LENGTH_SHORT
+//                                                ).show()
+//                                            }
 
                                             stopListening()
 
@@ -637,15 +637,15 @@ class VoskWakeWordService : Service() {
                         hasResult = true // ✅ Set flag when we have meaningful words
                         val result = meaningfulWords.joinToString(" ")
 
-                        serviceScope.launch {
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(
-                                    this@VoskWakeWordService,
-                                    "You said: $result",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
+//                        serviceScope.launch {
+//                            withContext(Dispatchers.Main) {
+//                                Toast.makeText(
+//                                    this@VoskWakeWordService,
+//                                    "You said: $result",
+//                                    Toast.LENGTH_LONG
+//                                ).show()
+//                            }
+//                        }
 
                         // Send result directly
                         sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
@@ -865,25 +865,6 @@ class VoskWakeWordService : Service() {
 
         } catch (e: Exception) {
             return false
-        }
-    }
-
-    // Add this method to your VoskWakeWordService class
-
-    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
-    private fun resumeSpeechSession() {
-        if (!isSessionActive || isShuttingDown) return
-
-        Log.d("HeyLisa", "▶️ Resuming speech recognition session")
-        sessionPaused = false
-        lastResultTime = System.currentTimeMillis()
-
-        serviceScope.launch {
-            withContext(Dispatchers.Main) {
-                if (isSessionActive && !sessionPaused && currentSpeechRecognizer != null) {
-                    startSpeechRecognition()
-                }
-            }
         }
     }
 
