@@ -69,6 +69,10 @@
             android:foregroundServiceType="microphone"
             android:enabled="true" />
 
+        <service android:name=".service.CustomTtsService"
+            android:exported="false"
+            android:enabled="true" />
+
         <service
             android:name=".custom.LisaVoiceInteractionService"
             android:permission="android.permission.BIND_VOICE_INTERACTION"

@@ -77,6 +77,8 @@ dependencies {
 
     implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
 
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

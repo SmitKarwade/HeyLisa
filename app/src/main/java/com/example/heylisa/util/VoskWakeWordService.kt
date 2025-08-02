@@ -31,6 +31,7 @@ import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import com.example.heylisa.R
 import com.example.heylisa.constant.Noisy
+import com.example.heylisa.service.CustomTtsService
 import com.example.heylisa.voice.VoiceInputActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +59,9 @@ class VoskWakeWordService : Service() {
     @Volatile private var isListening = false
     @Volatile private var isShuttingDown = false
     @Volatile private var isSessionActive = false
+    @Volatile private var isTtsSpeaking = false
+    @Volatile private var isProcessingResult = false
+    @Volatile private var sessionPaused = false
 
     // Synchronization
     private val recognizerLock = Any()
@@ -80,6 +84,47 @@ class VoskWakeWordService : Service() {
         @RequiresPermission(Manifest.permission.RECORD_AUDIO)
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
+                CustomTtsService.TTS_STARTED -> {
+                    Log.d("HeyLisa", "🔊 Custom TTS started - pausing speech recognition")
+                    isTtsSpeaking = true
+                    sessionPaused = true
+                    stopAndroidSpeechRecognizer()
+                }
+
+                CustomTtsService.TTS_FINISHED, CustomTtsService.TTS_ERROR -> {
+                    Log.d("HeyLisa", "🔇 Custom TTS finished")
+                    isTtsSpeaking = false
+                }
+
+                // Processing State Management
+                "com.example.heylisa.PROCESSING_STARTED" -> {
+                    Log.d("HeyLisa", "🔄 Result processing started")
+                    isProcessingResult = true
+                    sessionPaused = true
+                    stopAndroidSpeechRecognizer()
+                }
+
+                "com.example.heylisa.PROCESSING_COMPLETE" -> {
+                    Log.d("HeyLisa", "📥 PROCESSING_COMPLETE received")
+                    isProcessingResult = false
+
+                    if (!isTtsSpeaking && !isShuttingDown) {
+                        if (isSessionActive) {
+                            Log.d("HeyLisa", "🔄 Session active - resuming existing session")
+                            serviceScope.launch {
+                                delay(500)
+                                resumeSpeechSession()
+                            }
+                        } else {
+                            Log.d("HeyLisa", "🔄 Session ended - starting new session")
+                            serviceScope.launch {
+                                delay(500)
+                                startAndroidSpeechRecognition()
+                            }
+                        }
+                    }
+                }
+
                 "com.example.heylisa.RESTORE_WAKE_WORD" -> {
                     if (isShuttingDown || !::smallModel.isInitialized) {
                         Log.w("HeyLisa", "⚠️ Ignored restart — service is shutting down or model is not ready")
@@ -127,6 +172,11 @@ class VoskWakeWordService : Service() {
 
         // Register minimal broadcast receivers
         val stateFilter = IntentFilter().apply {
+            addAction(CustomTtsService.TTS_STARTED)
+            addAction(CustomTtsService.TTS_FINISHED)
+            addAction(CustomTtsService.TTS_ERROR)
+            addAction("com.example.heylisa.PROCESSING_STARTED")
+            addAction("com.example.heylisa.PROCESSING_COMPLETE")
             addAction("com.example.heylisa.RESTORE_WAKE_WORD")
             addAction("com.example.heylisa.FORCE_RESTART")
         }
@@ -748,6 +798,25 @@ class VoskWakeWordService : Service() {
 
         } catch (e: Exception) {
             return false
+        }
+    }
+
+    // Add this method to your VoskWakeWordService class
+
+    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+    private fun resumeSpeechSession() {
+        if (!isSessionActive || isShuttingDown) return
+
+        Log.d("HeyLisa", "▶️ Resuming speech recognition session")
+        sessionPaused = false
+        lastResultTime = System.currentTimeMillis()
+
+        serviceScope.launch {
+            withContext(Dispatchers.Main) {
+                if (isSessionActive && !sessionPaused && currentSpeechRecognizer != null) {
+                    startSpeechRecognition()
+                }
+            }
         }
     }
 

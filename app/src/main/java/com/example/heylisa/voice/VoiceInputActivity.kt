@@ -37,6 +37,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.heylisa.constant.Noisy
 import com.example.heylisa.viewmodel.EmailViewModel
 import com.example.heylisa.request.DraftResponse
+import com.example.heylisa.service.CustomTtsService
 
 class VoiceInputActivity : ComponentActivity() {
 
@@ -92,14 +93,14 @@ class VoiceInputActivity : ComponentActivity() {
                         }
                     }
                 }
-                // Add TTS state handling
-                "com.example.heylisa.TTS_STARTED" -> {
+
+                CustomTtsService.TTS_STARTED -> {
                     isTtsSpeaking.value = true
-                    Log.d("VoiceInputActivity", "TTS started speaking")
+                    Log.d("VoiceInputActivity", "Custom TTS started speaking")
                 }
-                "com.example.heylisa.TTS_FINISHED", "com.example.heylisa.TTS_ERROR" -> {
+                CustomTtsService.TTS_FINISHED, CustomTtsService.TTS_ERROR -> {
                     isTtsSpeaking.value = false
-                    Log.d("VoiceInputActivity", "TTS finished speaking")
+                    Log.d("VoiceInputActivity", "Custom TTS finished speaking")
                 }
             }
         }
