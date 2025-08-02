@@ -55,8 +55,6 @@ android {
 }
 
 dependencies {
-    implementation("androidx.lifecycle:lifecycle-process:2.9.2")
-
     implementation("net.java.dev.jna:jna:5.17.0@aar")
     implementation("com.alphacephei:vosk-android:0.3.47@aar")
 
@@ -68,14 +66,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.2")
 
     implementation("androidx.navigation:navigation-compose:2.9.2")
-
-    implementation("com.google.cloud:google-cloud-texttospeech:2.69.0")
-
-    implementation("io.grpc:grpc-okhttp:1.73.0")
-    implementation("io.grpc:grpc-protobuf:1.73.0")
-    implementation("io.grpc:grpc-stub:1.73.0")
-
-    implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
