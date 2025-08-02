@@ -15,6 +15,7 @@ import com.example.heylisa.request.ConfirmSendResponse
 import com.example.heylisa.request.DraftResponse
 import com.example.heylisa.request.InboxResponse
 import com.example.heylisa.service.CustomTtsService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -41,8 +42,16 @@ class EmailViewModel(
     private val ttsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                CustomTtsService.TTS_FINISHED, CustomTtsService.TTS_ERROR -> {
-                    Log.d("EmailViewModel", "📤 TTS finished - sending processing complete")
+                CustomTtsService.TTS_FINISHED -> {
+                    Log.d("EmailViewModel", "📤 TTS finished - waiting before sending processing complete")
+                    viewModelScope.launch {
+                        delay(2000) // Increased delay to ensure audio has settled
+                        Log.d("EmailViewModel", "📤 Sending processing complete after TTS delay")
+                        notifyProcessingComplete()
+                    }
+                }
+                CustomTtsService.TTS_ERROR -> {
+                    Log.d("EmailViewModel", "📤 TTS error - sending processing complete immediately")
                     notifyProcessingComplete()
                 }
             }
@@ -72,7 +81,6 @@ class EmailViewModel(
         }
     }
 
-
     data class EmailUiState(
         val isLoading: Boolean = false,
         val error: String? = null,
@@ -83,7 +91,8 @@ class EmailViewModel(
         val isDraftCreated: Boolean = false,
         val isSpeechActive: Boolean = false,
         val lastSpeechResult: String? = null,
-        val isProcessingBackend: Boolean = false
+        val isProcessingBackend: Boolean = false,
+        val isAwaitingFollowUp: Boolean = false // ✅ ADD THIS MISSING FIELD
     )
 
     sealed class IntentResult {
@@ -132,18 +141,22 @@ class EmailViewModel(
 
         } catch (e: Exception) {
             Log.e("EmailViewModel", "Failed to start custom TTS", e)
-
             // Send error broadcast if TTS fails to start
             context.sendBroadcast(Intent(CustomTtsService.TTS_ERROR))
-
-            // Still send processing complete to avoid getting stuck
-            notifyProcessingComplete()
         }
     }
 
     fun processUserInput(context: Context, input: String) {
         val cleanInput = input.trim()
         if (cleanInput.isEmpty()) return
+
+        // ✅ CRITICAL FIX: Send PROCESSING_STARTED only once, right at the beginning
+        notifyProcessingStarted()
+
+        // If we're in follow-up mode, reset the flag
+        if (_uiState.value.isAwaitingFollowUp) {
+            _uiState.value = _uiState.value.copy(isAwaitingFollowUp = false)
+        }
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(
@@ -170,6 +183,7 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
                         speak(errorMessage)
+                        // ✅ Processing complete will be sent after TTS finishes
                     }
                 }
             }
@@ -216,7 +230,7 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
                         speak(errorMessage)
-                        notifyProcessingComplete()
+                        // ✅ Processing complete will be sent after TTS finishes
                     }
                 }
             }
@@ -241,6 +255,7 @@ class EmailViewModel(
                 navigationEvent = NavigationEvent.ShowError(errorMessage)
             )
             speak(errorMessage)
+            // ✅ Processing complete will be sent after TTS finishes
         }
     }
 
@@ -255,6 +270,7 @@ class EmailViewModel(
                     navigationEvent = NavigationEvent.ShowError(errorMessage)
                 )
                 speak(errorMessage)
+                // ✅ Processing complete will be sent after TTS finishes
                 return
             }
             sendEmail(context, currentDraft.draft_id)
@@ -264,6 +280,7 @@ class EmailViewModel(
                 navigationEvent = NavigationEvent.ShowError(errorMessage)
             )
             speak(errorMessage)
+            // ✅ Processing complete will be sent after TTS finishes
         }
     }
 
@@ -292,6 +309,7 @@ class EmailViewModel(
                     _uiState.value = _uiState.value.copy(
                         navigationEvent = NavigationEvent.ToChat
                     )
+                    // ✅ FIXED: Send processing complete immediately for non-email commands
                     notifyProcessingComplete()
                 }
             }
@@ -301,7 +319,7 @@ class EmailViewModel(
                     navigationEvent = NavigationEvent.ShowError(errorMessage)
                 )
                 speak(errorMessage)
-                notifyProcessingComplete()
+                // ✅ Processing complete will be sent after TTS finishes
             }
         }
     }
@@ -315,7 +333,7 @@ class EmailViewModel(
 
     fun createDraft(context: Context, prompt: String) {
         viewModelScope.launch {
-            notifyProcessingStarted()
+            // ✅ REMOVED: Don't call notifyProcessingStarted() here - already called in processUserInput()
 
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
@@ -337,7 +355,6 @@ class EmailViewModel(
 
                         Log.d("EmailViewModel", "✅ Draft created successfully: ${result.draftResponse.draft_id}")
 
-                        // ✅ For new drafts, speak the full body
                         val textToSpeak = if (!result.draftResponse.body.isNullOrBlank()) {
                             "Here's your email: ${result.draftResponse.body}"
                         } else {
@@ -346,11 +363,10 @@ class EmailViewModel(
 
                         speak(textToSpeak)
                         isFirstDraftCreation = false
-
-                        // Processing complete will be sent after TTS finishes
+                        // ✅ Processing complete will be sent after TTS finishes
                     }
                     is DraftResult.Error -> {
-                        val errorMessage = "Failed to create draft"
+                        val errorMessage = "Failed to create draft: ${result.message}"
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
                             isProcessingBackend = false,
@@ -359,9 +375,9 @@ class EmailViewModel(
                             navigationEvent = NavigationEvent.ShowError(errorMessage)
                         )
                         speak(errorMessage)
+                        // ✅ Processing complete will be sent after TTS finishes
                         Log.e("EmailViewModel", "❌ Draft creation failed: ${result.message}")
                     }
-
                 }
             }
         }
@@ -369,7 +385,7 @@ class EmailViewModel(
 
     fun editDraft(context: Context, draftId: String, editPrompt: String) {
         viewModelScope.launch {
-            notifyProcessingStarted()
+            // ✅ REMOVED: Don't call notifyProcessingStarted() here - already called in processUserInput()
 
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
@@ -398,11 +414,10 @@ class EmailViewModel(
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
                             isProcessingBackend = false,
-                            currentDraft = updatedDraft, // Use the explicitly copied object
+                            currentDraft = updatedDraft,
                             navigationEvent = NavigationEvent.ShowSuccess("Draft updated successfully!")
                         )
 
-                        // ✅ Verify the state was updated
                         Log.d("EmailViewModel", "📧 UI State updated with subject: '${_uiState.value.currentDraft?.subject}'")
 
                         val textToSpeak = if (!result.draftResponse.edit_summary.isNullOrBlank()) {
@@ -413,19 +428,27 @@ class EmailViewModel(
 
                         speak(textToSpeak)
                         Log.d("EmailViewModel", "✅ Draft edited successfully")
+                        // ✅ Processing complete will be sent after TTS finishes
                     }
                     is DraftResult.Error -> {
-                        // ... existing error handling
+                        val errorMessage = "Failed to edit draft: ${result.message}"
+                        _uiState.value = _uiState.value.copy(
+                            isLoading = false,
+                            isProcessingBackend = false,
+                            navigationEvent = NavigationEvent.ShowError(errorMessage)
+                        )
+                        speak(errorMessage)
+                        // ✅ Processing complete will be sent after TTS finishes
+                        Log.e("EmailViewModel", "❌ Draft editing failed: ${result.message}")
                     }
                 }
             }
         }
     }
 
-
     fun sendEmail(context: Context, draftId: String) {
         viewModelScope.launch {
-            notifyProcessingStarted()
+            // ✅ REMOVED: Don't call notifyProcessingStarted() here - already called in processUserInput()
 
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
@@ -447,8 +470,7 @@ class EmailViewModel(
 
                         speak("Email sent successfully")
                         Log.d("EmailViewModel", "✅ Email sent successfully")
-
-                        // Processing complete will be sent after TTS finishes
+                        // ✅ Processing complete will be sent after TTS finishes
                     }
                     is SendResult.Error -> {
                         val errorMessage = "Failed to send email: ${result.message}"
@@ -459,6 +481,7 @@ class EmailViewModel(
                         )
 
                         speak(errorMessage)
+                        // ✅ Processing complete will be sent after TTS finishes
                         Log.e("EmailViewModel", "❌ Email send failed: ${result.message}")
                     }
                 }
@@ -485,9 +508,6 @@ class EmailViewModel(
     fun onNavigationHandled() {
         _uiState.value = _uiState.value.copy(navigationEvent = null)
     }
-
-
-
 
     // Getters
     fun getDraftTo(): String? = _uiState.value.currentDraft?.to
