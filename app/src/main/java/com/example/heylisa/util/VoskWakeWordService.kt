@@ -62,6 +62,8 @@ class VoskWakeWordService : Service() {
     @Volatile private var isTtsSpeaking = false
     @Volatile private var isProcessingResult = false
     @Volatile private var sessionPaused = false
+    @Volatile private var inFollowUp = false
+
 
     // Synchronization
     private val recognizerLock = Any()
@@ -110,34 +112,25 @@ class VoskWakeWordService : Service() {
                 }
 
                 "com.example.heylisa.PROCESSING_COMPLETE" -> {
-                    Log.d("HeyLisa", "📥 PROCESSING_COMPLETE received")
                     isProcessingResult = false
+                    val expectFollowUp = intent?.getBooleanExtra("expect_follow_up", true) ?: true
+                    Log.d("HeyLisa", "📥 PROCESSING_COMPLETE (expectFollowUp=$expectFollowUp)")
 
-                    // ✅ CRITICAL FIX: Only resume if TTS is completely done AND no other recognition is active
-                    if (!isTtsSpeaking && !isShuttingDown) {
-                        if (isSessionActive) {
-                            Log.d("HeyLisa", "🔄 Session active - starting follow-up listening")
+                    // Always stop any residual recognizer from the previous session
+                    stopAndroidSpeechRecognizer()
 
-                            // ✅ STOP any existing speech recognition FIRST
-                            stopAndroidSpeechRecognizer()
-
+                    if (!isShuttingDown && !isTtsSpeaking) {
+                        if (expectFollowUp) {
+                            Log.d("HeyLisa", "🔄 Starting follow-up listening")
                             serviceScope.launch {
-                                // ✅ Clean up existing recognizer completely
-                                speechRecognitionMutex.withLock {
-                                    withContext(Dispatchers.Main) {
-                                        currentSpeechRecognizer?.destroy()
-                                        currentSpeechRecognizer = null
-                                    }
-                                }
-
-                                delay(1000) // Give time for cleanup
+                                delay(800)          // let audio settle
                                 startFollowUpListening()
                             }
                         } else {
-                            Log.d("HeyLisa", "🔄 Session ended - starting new session")
+                            Log.d("HeyLisa", "🏁 No follow-up requested – back to wake word")
                             serviceScope.launch {
-                                delay(1000)
-                                startAndroidSpeechRecognition()
+                                delay(800)
+                                startWakeWordDetection()
                             }
                         }
                     }
@@ -594,12 +587,18 @@ class VoskWakeWordService : Service() {
                     }
                     SpeechRecognizer.ERROR_NO_MATCH,
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
-                        // ✅ CRITICAL FIX: Check TTS state before restarting
+                        // ✅ CRITICAL FIX: Don't restart if we're in follow-up mode
+                        if (inFollowUp) {
+                            Log.d("HeyLisa", "🛑 No-match/timeout during follow-up - letting follow-up handler manage it")
+                            return
+                        }
+
+                        // ✅ Only restart for main sessions, not follow-up
                         if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
                             Handler(Looper.getMainLooper()).postDelayed({
                                 // Double-check conditions before restarting
-                                if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
-                                    Log.d("HeyLisa", "🔄 Restarting speech recognition after no match/timeout")
+                                if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult && !inFollowUp) {
+                                    Log.d("HeyLisa", "🔄 Restarting speech recognition after no match/timeout (main session)")
                                     startSpeechRecognition()
                                 } else {
                                     Log.d("HeyLisa", "🛑 Conditions changed - not restarting speech recognition")
@@ -734,6 +733,7 @@ class VoskWakeWordService : Service() {
         Log.d("HeyLisa", "🏁 Ending speech recognition session")
 
         isSessionActive = false
+        inFollowUp = false // ✅ CLEAR FLAG when ending session
 
         serviceScope.launch {
             speechRecognitionMutex.withLock {
@@ -894,6 +894,7 @@ class VoskWakeWordService : Service() {
             return
         }
 
+        inFollowUp = true // ✅ SET FLAG
         Log.d("HeyLisa", "🎤 Starting follow-up listening session after TTS completion")
 
         speechRecognitionMutex.withLock {
@@ -905,6 +906,7 @@ class VoskWakeWordService : Service() {
             }
 
             if (isShuttingDown) {
+                inFollowUp = false // ✅ CLEAR FLAG
                 return
             }
 
@@ -977,6 +979,8 @@ class VoskWakeWordService : Service() {
                 Log.e("HeyLisa", "❌ Follow-up listening failed", e)
                 followUpTimeoutJob.cancel()
                 endSpeechSession()
+            } finally {
+                inFollowUp = false // ✅ CLEAR FLAG
             }
         }
     }
