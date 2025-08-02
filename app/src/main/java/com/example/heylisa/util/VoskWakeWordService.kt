@@ -17,10 +17,14 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
@@ -32,25 +36,23 @@ import com.example.heylisa.voice.VoiceInputActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import org.vosk.Model
 import org.vosk.Recognizer
 import java.io.File
-import java.io.IOException
+import java.util.Locale
 import kotlin.math.max
 
 class VoskWakeWordService : Service() {
 
-    private lateinit var smallModel: Model  // For wake word detection
-    private lateinit var bigModel: Model    // For speech recognition
-
+    private lateinit var smallModel: Model  // Only for wake word detection
     private var wakeWordRecognizer: Recognizer? = null
-    private var speechRecognizer: Recognizer? = null
+    private var androidSpeechRecognizer: SpeechRecognizer? = null
     private var audioRecord: AudioRecord? = null
 
     @Volatile private var isListening = false
@@ -73,6 +75,12 @@ class VoskWakeWordService : Service() {
     private var lastSpeechTime = System.currentTimeMillis()
     private val WAKE_WORD_TIMEOUT = 10000L // 10 seconds timeout
 
+    // Android Speech Recognition state
+    private var speechRecognitionStartTime = 0L
+    private val MAX_SPEECH_RECOGNITION_TIME = 60000L // 60 seconds max
+    private val MEANINGFUL_SILENCE_TIMEOUT = 8000L // 8 seconds
+    private var lastResultTime = 0L
+
     // Combined broadcast receiver for all states
     private val stateReceiver = object : BroadcastReceiver() {
         @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -83,6 +91,7 @@ class VoskWakeWordService : Service() {
                     Log.d("HeyLisa", "🔊 TTS started - pausing speech recognition")
                     isTtsSpeaking = true
                     sessionPaused = true
+                    stopAndroidSpeechRecognizer()
                 }
 
                 CloudTtsService.TTS_FINISHED, CloudTtsService.TTS_ERROR -> {
@@ -95,10 +104,11 @@ class VoskWakeWordService : Service() {
                     Log.d("HeyLisa", "🔄 Result processing started")
                     isProcessingResult = true
                     sessionPaused = true
+                    stopAndroidSpeechRecognizer()
                 }
 
                 "com.example.heylisa.PROCESSING_COMPLETE" -> {
-                    Log.d("HeyLisa", "📥 PROCESSING_COMPLETE received - Current state: isTtsSpeaking=$isTtsSpeaking, isShuttingDown=$isShuttingDown, sessionPaused=$sessionPaused, isSessionActive=$isSessionActive")
+                    Log.d("HeyLisa", "📥 PROCESSING_COMPLETE received")
                     isProcessingResult = false
 
                     if (!isTtsSpeaking && !isShuttingDown) {
@@ -112,11 +122,9 @@ class VoskWakeWordService : Service() {
                             Log.d("HeyLisa", "🔄 Session ended - starting new session")
                             serviceScope.launch {
                                 delay(500)
-                                startSingleContinuousSpeechSession()
+                                startAndroidSpeechRecognition()
                             }
                         }
-                    } else {
-                        Log.d("HeyLisa", "❌ Cannot resume - isTtsSpeaking=$isTtsSpeaking, isShuttingDown=$isShuttingDown")
                     }
                 }
 
@@ -136,7 +144,7 @@ class VoskWakeWordService : Service() {
                     speechSessionCancelled = true
 
                     stopListening()
-                    closeSpeechRecognizerSafely()
+                    stopAndroidSpeechRecognizer()
 
                     serviceScope.launch {
                         delay(500)
@@ -170,9 +178,9 @@ class VoskWakeWordService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(stateReceiver, stateFilter, RECEIVER_EXPORTED)
         } else {
-            // Android 11-12 compatible registration
             registerReceiver(stateReceiver, stateFilter)
         }
+
         checkBatteryOptimization()
         createNotificationChannel()
         createWakeWordAlertChannel()
@@ -187,12 +195,12 @@ class VoskWakeWordService : Service() {
 
             sendBroadcast(Intent("com.example.heylisa.MODEL_INIT_STARTED"))
             try {
-                // Initialize BOTH models
-                if (initModel()) {
+                // Initialize only small model for wake word detection
+                if (initWakeWordModel()) {
                     sendBroadcast(Intent("com.example.heylisa.MODEL_INIT_FINISHED"))
-                    startWakeWordDetection() // Uses small model
+                    startWakeWordDetection()
                 } else {
-                    throw Exception("Failed to initialize models")
+                    throw Exception("Failed to initialize wake word model")
                 }
             } catch (e: Exception) {
                 Log.e("HeyLisa", "Model init failed", e)
@@ -215,7 +223,6 @@ class VoskWakeWordService : Service() {
         synchronized(recognizerLock) {
             try {
                 wakeWordRecognizer?.close()
-                // Use SMALL model for wake word detection WITHOUT grammar constraint
                 wakeWordRecognizer = Recognizer(smallModel, 16000.0f)
             } catch (e: Exception) {
                 Log.e("HeyLisa", "Failed to init wake word recognizer with small model", e)
@@ -251,7 +258,7 @@ class VoskWakeWordService : Service() {
         wakeWordJob = serviceScope.launch {
             var consecutiveZeroReads = 0
             val maxZeroReads = 50
-            var wakeWordBuffer = StringBuilder() // Buffer to track recent speech
+            var wakeWordBuffer = StringBuilder()
 
             while (isListening && !isShuttingDown) {
                 try {
@@ -279,7 +286,6 @@ class VoskWakeWordService : Service() {
                             wakeWordRecognizer?.partialResult
                         }
 
-                        // Process partial results
                         if (!partial.isNullOrEmpty()) {
                             val currentText = Regex("\"partial\"\\s*:\\s*\"(.*?)\"")
                                 .find(partial)?.groupValues?.getOrNull(1)
@@ -288,7 +294,6 @@ class VoskWakeWordService : Service() {
                             if (!currentText.isNullOrEmpty()) {
                                 val currentTime = System.currentTimeMillis()
 
-                                // Check for timeout and reset if needed
                                 if (currentTime - lastSpeechTime > WAKE_WORD_TIMEOUT) {
                                     Log.d("HeyLisa", "🔄 No wake word detected for 10 seconds, resetting recognizer")
                                     synchronized(recognizerLock) {
@@ -299,24 +304,18 @@ class VoskWakeWordService : Service() {
                                 }
 
                                 lastSpeechTime = currentTime
-
-                                // Maintain a rolling buffer of recent speech
                                 wakeWordBuffer.append(" ").append(currentText)
 
-                                // Keep buffer manageable (last 50 characters)
                                 if (wakeWordBuffer.length > 50) {
                                     wakeWordBuffer.delete(0, wakeWordBuffer.length - 50)
                                 }
 
-                                // Check for wake word in current buffer
                                 if (hasMinimumConfidence(partial) && checkForWakeWordSmallModel(partial)) {
                                     Log.d("HeyLisa", "🔍 WAKE WORD FOUND! Stopping wake word detection immediately")
 
-                                    // IMMEDIATELY stop listening to prevent continuous capture
                                     isListening = false
 
-                                    // Final validation
-                                    delay(100) // Brief pause for final result
+                                    delay(100)
                                     if (validateWakeWordWithFinalResult()) {
                                         Log.i("HeyLisa", "✅ Wake word CONFIRMED!")
 
@@ -328,19 +327,22 @@ class VoskWakeWordService : Service() {
                                             ).show()
                                         }
 
-                                        stopListening() // Clean shutdown
+                                        stopListening()
 
                                         serviceScope.launch {
                                             delay(500)
+
+                                            // **ADD THIS: Launch VoiceInputActivity**
+                                            launchVoiceInputActivity()
+
                                             sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
                                                 putExtra("state", "wake_word_detected")
                                             })
                                             showWakeWordDetectedNotification()
-                                            startSingleContinuousSpeechSession()
+                                            startAndroidSpeechRecognition()
                                         }
-                                        break // Exit loop immediately
+                                        break
                                     } else {
-                                        // If final validation fails, continue listening
                                         isListening = true
                                         Log.d("HeyLisa", "❌ Final validation failed, continuing to listen")
                                     }
@@ -359,7 +361,268 @@ class VoskWakeWordService : Service() {
         }
     }
 
-    // ✅ Updated wake word checking - looks for pattern anywhere in speech
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun startAndroidSpeechRecognition() {
+        Log.d("HeyLisa", "🎤 Starting Android Speech Recognition...")
+
+        isSessionActive = true
+        speechRecognitionStartTime = System.currentTimeMillis()
+        lastResultTime = System.currentTimeMillis()
+
+        speechRecognitionJob?.cancel()
+        speechRecognitionJob = serviceScope.launch {
+            withContext(Dispatchers.Main) {
+                initializeAndroidSpeechRecognizer()
+                startSpeechRecognition()
+            }
+
+            // Monitor session timeout
+            while (isSessionActive && !isShuttingDown) {
+                val currentTime = System.currentTimeMillis()
+                val sessionDuration = currentTime - speechRecognitionStartTime
+                val timeSinceLastResult = currentTime - lastResultTime
+
+                // End session if 60 seconds elapsed or 8 seconds of silence
+                if (sessionDuration >= MAX_SPEECH_RECOGNITION_TIME ||
+                    (timeSinceLastResult >= MEANINGFUL_SILENCE_TIMEOUT && !sessionPaused)) {
+
+                    Log.d("HeyLisa", "🏁 Session timeout - ending speech recognition")
+                    endSpeechSession()
+                    break
+                }
+
+                delay(1000) // Check every second
+            }
+        }
+    }
+
+    private fun launchVoiceInputActivity() {
+        try {
+            val intent = Intent(this, VoiceInputActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION
+
+                // Optional: Add extra data if needed
+                putExtra("launched_from_wake_word", true)
+                putExtra("wake_word_timestamp", System.currentTimeMillis())
+            }
+
+            startActivity(intent)
+            Log.d("HeyLisa", "🚀 Launched VoiceInputActivity from wake word detection")
+
+        } catch (e: Exception) {
+            Log.e("HeyLisa", "Failed to launch VoiceInputActivity", e)
+
+            // Fallback: Show notification to manually open
+            showWakeWordDetectedNotification()
+        }
+    }
+
+    private fun initializeAndroidSpeechRecognizer() {
+        if (androidSpeechRecognizer != null) {
+            androidSpeechRecognizer?.destroy()
+        }
+
+        androidSpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        androidSpeechRecognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                Log.d("HeyLisa", "🎤 Android Speech Recognizer ready for speech")
+                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                    putExtra("state", "speech_recognition_started")
+                })
+            }
+
+            override fun onBeginningOfSpeech() {
+                Log.d("HeyLisa", "🗣️ Beginning of speech detected")
+                lastResultTime = System.currentTimeMillis()
+            }
+
+            override fun onRmsChanged(rmsdB: Float) {
+                // Audio level monitoring - can be used for UI feedback
+            }
+
+            override fun onBufferReceived(buffer: ByteArray?) {
+                // Raw audio buffer - not typically used
+            }
+
+            override fun onEndOfSpeech() {
+                Log.d("HeyLisa", "🔚 End of speech detected")
+            }
+
+            @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+            override fun onError(error: Int) {
+                val errorMessage = when (error) {
+                    SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
+                    SpeechRecognizer.ERROR_CLIENT -> "Client side error"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Insufficient permissions"
+                    SpeechRecognizer.ERROR_NETWORK -> "Network error"
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
+                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech input matched"
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "RecognitionService busy"
+                    SpeechRecognizer.ERROR_SERVER -> "Server error"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech input"
+                    else -> "Unknown error"
+                }
+
+                Log.e("HeyLisa", "Speech recognition error: $errorMessage")
+
+                // Handle specific errors
+                when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH,
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+                        // Restart recognition if no speech detected
+                        if (isSessionActive && !sessionPaused) {
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                if (isSessionActive && !sessionPaused) {
+                                    startSpeechRecognition()
+                                }
+                            }, 1000)
+                        }
+                    }
+                    else -> {
+                        // For other errors, end the session
+                        endSpeechSession()
+                    }
+                }
+            }
+
+            @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+            override fun onResults(results: Bundle?) {
+                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val confidence = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
+
+                if (!matches.isNullOrEmpty()) {
+                    val recognizedText = matches[0].lowercase().trim()
+                    val confidenceScore = confidence?.getOrNull(0) ?: 0.0f
+
+                    Log.d("HeyLisa", "🎯 Recognized: '$recognizedText' (confidence: $confidenceScore)")
+
+                    // Filter out noisy words
+                    val words = recognizedText.split(" ")
+                    val meaningfulWords = words.filterNot { it in Noisy.noisyWords }
+
+                    if (meaningfulWords.isNotEmpty()) {
+                        val result = meaningfulWords.joinToString(" ")
+
+
+                        // Send result for processing
+                        sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
+                            putExtra("result", result)
+                        })
+
+                        lastResultTime = System.currentTimeMillis()
+
+                        // Pause session while processing
+                        sessionPaused = true
+
+                        serviceScope.launch {
+                            delay(300)
+                            sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
+                        }
+                    }
+                }
+
+                // Continue listening if session is still active and not paused
+                if (isSessionActive && !sessionPaused) {
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (isSessionActive && !sessionPaused) {
+                            startSpeechRecognition()
+                        }
+                    }, 500)
+                }
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                if (!matches.isNullOrEmpty()) {
+                    val partialText = matches[0]
+
+                    // Send partial results for UI feedback
+                    sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
+                        putExtra("text", partialText)
+                    })
+
+                    lastResultTime = System.currentTimeMillis()
+                }
+            }
+
+            override fun onEvent(eventType: Int, params: Bundle?) {
+                // Handle speech recognition events
+            }
+        })
+    }
+    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+    private fun startSpeechRecognition() {
+        if (sessionPaused || !isSessionActive) return
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+        }
+
+        try {
+            androidSpeechRecognizer?.startListening(intent)
+        } catch (e: Exception) {
+            Log.e("HeyLisa", "Failed to start speech recognition", e)
+            endSpeechSession()
+        }
+    }
+
+    private fun stopAndroidSpeechRecognizer() {
+        androidSpeechRecognizer?.stopListening()
+    }
+
+    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+    private fun resumeSpeechSession() {
+        if (!isSessionActive || isShuttingDown) return
+
+        Log.d("HeyLisa", "▶️ Resuming speech recognition session")
+        sessionPaused = false
+        lastResultTime = System.currentTimeMillis()
+
+        serviceScope.launch {
+            withContext(Dispatchers.Main) {
+                if (isSessionActive && !sessionPaused) {
+                    startSpeechRecognition()
+                }
+            }
+        }
+    }
+
+    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+    private fun endSpeechSession() {
+        Log.d("HeyLisa", "🏁 Ending speech recognition session")
+
+        isSessionActive = false
+        sessionPaused = false
+
+        serviceScope.launch {
+            withContext(Dispatchers.Main) {
+                androidSpeechRecognizer?.stopListening()
+            }
+
+            sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
+
+            if (!isShuttingDown) {
+                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                    putExtra("state", "wake_word_listening")
+                })
+
+                delay(1000)
+                if (!isProcessingResult && !isTtsSpeaking) {
+                    startWakeWordDetection()
+                }
+            }
+        }
+    }
+
+    // Wake word detection methods (unchanged)
     private fun checkForWakeWordSmallModel(result: String?): Boolean {
         if (result.isNullOrEmpty()) return false
 
@@ -372,17 +635,13 @@ class VoskWakeWordService : Service() {
 
             Log.d("HeyLisa", "Heard: '$partial'")
 
-            // Check if "hey lisa" pattern exists anywhere in the speech
             val words = partial.split("\\s+".toRegex()).filter { it.isNotEmpty() }
 
-            // Look for "hey lisa" pattern in the speech
             for (i in 0 until words.size - 1) {
                 val firstWord = words[i]
                 val secondWord = words[i + 1]
 
-                // Valid first words
                 val validFirstWords = setOf("hey", "hi", "hello", "he")
-                // Valid second words (Lisa variations)
                 val validSecondWords = setOf("lisa", "liza", "leesa")
 
                 if (firstWord in validFirstWords && secondWord in validSecondWords) {
@@ -400,7 +659,6 @@ class VoskWakeWordService : Service() {
         }
     }
 
-    // ✅ Updated validation - also looks for pattern anywhere
     private fun validateWakeWordWithFinalResult(): Boolean {
         return try {
             val finalResult = synchronized(recognizerLock) {
@@ -417,7 +675,6 @@ class VoskWakeWordService : Service() {
 
             Log.d("HeyLisa", "Final validation text: '$finalText'")
 
-            // Check if wake word pattern exists anywhere in the final text
             val words = finalText.split("\\s+".toRegex()).filter { it.isNotEmpty() }
 
             for (i in 0 until words.size - 1) {
@@ -433,7 +690,6 @@ class VoskWakeWordService : Service() {
                 }
             }
 
-            // Also check exact complete matches
             val exactMatches = setOf(
                 "hey lisa", "hi lisa", "hello lisa",
                 "he lisa", "hey liza", "hi liza"
@@ -454,7 +710,6 @@ class VoskWakeWordService : Service() {
         if (result.isNullOrEmpty()) return false
 
         try {
-            // Check if result contains confidence score
             val confidenceRegex = Regex("\"confidence\"\\s*:\\s*([0-9.]+)")
             val confidenceMatch = confidenceRegex.find(result)
 
@@ -462,11 +717,10 @@ class VoskWakeWordService : Service() {
                 val confidence = confidenceMatch.groupValues[1].toDoubleOrNull()
                 if (confidence != null) {
                     Log.d("HeyLisa", "Recognition confidence: $confidence")
-                    return confidence > 0.5 // 50% minimum confidence
+                    return confidence > 0.5
                 }
             }
 
-            // If no confidence available, check text length as fallback
             val hasText = result.contains("\"text\"") || result.contains("\"partial\"")
             return hasText
 
@@ -475,332 +729,7 @@ class VoskWakeWordService : Service() {
         }
     }
 
-    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    private fun startSingleContinuousSpeechSession() {
-        speechRecognitionJob?.cancel()
-        speechRecognitionJob = serviceScope.launch {
-            try {
-                isSessionActive = true
-                closeSpeechRecognizerSafely()
-                delay(200)
-
-                if (isShuttingDown) return@launch
-
-                synchronized(recognizerLock) {
-                    speechRecognizer = Recognizer(bigModel, 16000.0f) // Use bigModel
-                }
-                Log.d("HeyLisa", "✅ Speech recognizer initialized with BIG model")
-
-                val sampleRate = 16000
-                val bufferSize = max(
-                    AudioRecord.getMinBufferSize(
-                        sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-                    ), 2048 * 2
-                )
-
-                if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                    Log.e("HeyLisa", "Microphone permission not granted during recognition")
-                    stopSelf()
-                    return@launch
-                }
-
-                val record = AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                    sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
-                )
-
-                if (record.state != AudioRecord.STATE_INITIALIZED) {
-                    Log.e("HeyLisa", "Speech AudioRecord init failed")
-                    stopSelf()
-                    return@launch
-                }
-
-                val buffer = ByteArray(bufferSize)
-                val maxSessionTime = 60000L // 60 seconds max
-                val meaningfulSilenceTimeout = 8000L // 8 seconds of meaningful silence to end session
-                val processTimeout = 3000L // 3 seconds to process current speech
-
-                var pauseStartTime = 0L
-                var totalPausedTime = 0L
-
-                var sessionStartTime = System.currentTimeMillis()
-                var lastMeaningfulSpeechTime = System.currentTimeMillis()
-                var lastAnyActivityTime = System.currentTimeMillis()
-                var activeListeningTime = 0L // Track time actually listening (not paused)
-
-                var currentSpeechBuilder = StringBuilder()
-                var previousPartial = ""
-                var hasCollectedSpeech = false
-
-                sessionPaused = false
-                isListening = true
-
-                record.startRecording()
-
-                // Skip initial buffer noise
-                repeat(3) {
-                    record.read(buffer, 0, buffer.size)
-                    delay(50)
-                }
-
-                delay(500) // Give user time to start speaking
-
-                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
-                    putExtra("state", "speech_recognition_started")
-                })
-
-                Log.d("HeyLisa", "🎤 Started single continuous speech session (60s max, 8s meaningful silence timeout)")
-
-                while (!isShuttingDown && isListening) {
-
-                    // Check if session is paused (TTS speaking or backend processing)
-                    if (sessionPaused) {
-                        if (pauseStartTime == 0L) {
-                            pauseStartTime = System.currentTimeMillis()
-                            Log.d("HeyLisa", "⏸️ Session paused - timer stopped")
-                        }
-
-                        Log.d("HeyLisa", "⏸️ Session paused - waiting...")
-                        delay(100)
-                        continue
-                    }else {
-                        // Add paused time to total when resuming
-                        if (pauseStartTime > 0L) {
-                            val pauseDuration = System.currentTimeMillis() - pauseStartTime
-                            totalPausedTime += pauseDuration
-                            pauseStartTime = 0L
-
-                            sessionStartTime = System.currentTimeMillis()
-                            activeListeningTime = 0L
-
-                            // RESET the meaningful speech timer when resuming
-                            val currentAdjustedTime = System.currentTimeMillis() - totalPausedTime
-                            lastMeaningfulSpeechTime = currentAdjustedTime
-                            lastAnyActivityTime = currentAdjustedTime
-
-                            Log.d("HeyLisa", "▶️ Session resumed - adding ${pauseDuration}ms to paused time (total: ${totalPausedTime}ms)")
-                            Log.d("HeyLisa", "🔄 Reset timers - giving user fresh 8 seconds to speak")
-
-                            Log.d("HeyLisa", "🎤 Confirming audio processing restart...")
-                        }
-                    }
-
-                    val currentTime = System.currentTimeMillis()
-                    val adjustedCurrentTime = currentTime - totalPausedTime
-                    val timeSinceMeaningfulSpeech = adjustedCurrentTime - lastMeaningfulSpeechTime
-                    val timeSinceAnyActivity = adjustedCurrentTime - lastAnyActivityTime
-                    val timeSinceSessionStart = currentTime - sessionStartTime
-
-                    activeListeningTime += 100
-                    if (activeListeningTime % 5000 == 0L) { // Every 5 seconds
-                        Log.d("HeyLisa", "🔄 Audio loop active - listening for speech...")
-                    }
-                    // If 60 seconds of active listening, end session
-                    if (timeSinceSessionStart >= maxSessionTime) {
-                        Log.d("HeyLisa", "⏰ 60 seconds completed for this interaction cycle - ending speech session")
-                        break
-                    }
-
-                    // If 8 seconds of meaningful silence (excluding paused time), end the entire session
-                    if (timeSinceMeaningfulSpeech > meaningfulSilenceTimeout) {
-                        Log.d("HeyLisa", "🔚 8 seconds of meaningful silence - ending speech session (excluding ${totalPausedTime}ms paused time)")
-                        break
-                    }
-
-                    // If 3 seconds of any silence and we have speech, process it
-                    if (timeSinceAnyActivity > processTimeout && hasCollectedSpeech && !sessionPaused) {
-                        Log.d("HeyLisa", "📝 3 seconds of silence - processing current speech")
-
-                        val finalResult = synchronized(recognizerLock) {
-                            speechRecognizer?.finalResult
-                        }
-                        val finalText = Regex("\"text\"\\s*:\\s*\"(.*?)\"")
-                            .find(finalResult ?: "")?.groupValues?.getOrNull(1)
-
-                        if (!finalText.isNullOrBlank()) {
-                            currentSpeechBuilder.append(" ").append(finalText)
-                        }
-
-                        val cleanedSpeech = cleanRepeatedWords(currentSpeechBuilder.toString().trim().lowercase())
-                        val meaningfulWords = cleanedSpeech.split(" ").filterNot { it in Noisy.noisyWords }
-
-                        if (meaningfulWords.isNotEmpty()) {
-                            val result = meaningfulWords.joinToString(" ")
-                            Log.i("HeyLisa", "✅ Processed speech: $result")
-
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(
-                                    applicationContext,
-                                    "You said: $result",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-
-                            // Send result - this will trigger backend processing and TTS
-                            sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
-                                putExtra("result", result)
-                            })
-
-                            delay(300)
-                            sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
-
-                            // Session will be paused by PROCESSING_STARTED broadcast
-                            // and resumed by PROCESSING_COMPLETE broadcast after TTS finishes
-                        }
-
-                        // Reset for next speech segment within same session
-                        synchronized(recognizerLock) {
-                            speechRecognizer?.close()
-                            speechRecognizer = Recognizer(bigModel, 16000.0f)
-                        }
-
-                        currentSpeechBuilder.clear()
-                        previousPartial = ""
-                        hasCollectedSpeech = false
-                        lastAnyActivityTime = adjustedCurrentTime
-
-                        Log.d("HeyLisa", "🔄 Ready for next speech segment in same session...")
-                        continue
-                    }
-
-                    // Only read audio if not paused
-                    if (!sessionPaused) {
-                        val read = record.read(buffer, 0, buffer.size)
-                        if (read > 0 && read % 2 == 0) {
-                            if (isShuttingDown) break
-
-                            synchronized(recognizerLock) {
-                                speechRecognizer?.acceptWaveForm(buffer, read)
-                            }
-
-                            val partial = synchronized(recognizerLock) {
-                                speechRecognizer?.partialResult
-                            }
-                            val currentText = Regex("\"partial\"\\s*:\\s*\"(.*?)\"")
-                                .find(partial ?: "")?.groupValues?.getOrNull(1)
-
-                            if (!currentText.isNullOrBlank() && currentText != previousPartial) {
-                                previousPartial = currentText
-                                lastAnyActivityTime = adjustedCurrentTime
-
-                                // Check if this is meaningful speech (not just noise)
-                                val words = currentText.lowercase().split(" ")
-                                val meaningfulWords = words.filterNot { it in Noisy.noisyWords }
-
-                                if (meaningfulWords.isNotEmpty()) {
-                                    lastMeaningfulSpeechTime = adjustedCurrentTime
-                                    hasCollectedSpeech = true
-                                    Log.d("HeyLisa", "🗣️ Meaningful speech: $currentText")
-
-                                    sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
-                                        putExtra("text", currentText)
-                                    })
-                                } else {
-                                    Log.d("HeyLisa", "🔇 Noise ignored: $currentText")
-                                }
-                            }
-                        }
-                    }
-
-                    delay(10)
-                }
-
-                record.stop()
-                record.release()
-
-                // Process any remaining speech at end of session
-                if (hasCollectedSpeech && !sessionPaused) {
-                    val finalResult = synchronized(recognizerLock) {
-                        speechRecognizer?.finalResult
-                    }
-                    val finalText = Regex("\"text\"\\s*:\\s*\"(.*?)\"")
-                        .find(finalResult ?: "")?.groupValues?.getOrNull(1)
-
-                    if (!finalText.isNullOrBlank()) {
-                        currentSpeechBuilder.append(" ").append(finalText)
-                    }
-
-                    val cleanedSpeech = cleanRepeatedWords(currentSpeechBuilder.toString().trim().lowercase())
-                    val meaningfulWords = cleanedSpeech.split(" ").filterNot { it in Noisy.noisyWords }
-
-                    if (meaningfulWords.isNotEmpty()) {
-                        val result = meaningfulWords.joinToString(" ")
-                        Log.i("HeyLisa", "✅ Final speech: $result")
-
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(
-                                applicationContext,
-                                "Final: $result",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-
-                        sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
-                            putExtra("result", result)
-                        })
-                    }
-                }
-
-                Log.d("HeyLisa", "🏁 Single continuous speech session ended")
-
-            } catch (e: Exception) {
-                Log.e("HeyLisa", "❌ Speech recognition failed", e)
-            } finally {
-                isSessionActive = false
-                closeSpeechRecognizerSafely()
-                isListening = false
-                sessionPaused = false
-
-                if (!isShuttingDown) {
-                    sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
-
-                    if (speechSessionCancelled) {
-                        Log.w("HeyLisa", "⚠️ Speech session was cancelled — returning to wake word")
-                        speechSessionCancelled = false
-                    } else {
-                        Log.d("HeyLisa", "🔄 Returning to wake word detection")
-                    }
-
-                    sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
-                        putExtra("state", "wake_word_listening")
-                    })
-
-                    // Wait for any final processing to complete before returning to wake word
-                    delay(1000)
-                    if (!isProcessingResult && !isTtsSpeaking) {
-                        startWakeWordDetection()
-                    }
-                }
-            }
-        }
-    }
-
-    private fun resumeSpeechSession() {
-        Log.d("HeyLisa", "🔄 resumeSpeechSession called - Current state: isShuttingDown=$isShuttingDown, sessionPaused=$sessionPaused")
-
-        if (isShuttingDown) {
-            Log.d("HeyLisa", "❌ Cannot resume - service is shutting down")
-            return
-        }
-
-        if (!isSessionActive) {
-            Log.w("HeyLisa", "⚠️ Session not active - cannot resume, need to restart")
-            return
-        }
-
-        Log.d("HeyLisa", "▶️ Resuming speech recognition session")
-        sessionPaused = false
-
-        Log.d("HeyLisa", "🎤 Audio processing should now resume in main loop")
-    }
-
     private fun stopListening() {
-        Handler.createAsync(Looper.getMainLooper()).post{
-            Toast.makeText(this, "Stopping listening...", Toast.LENGTH_SHORT).show()
-        }
         isListening = false
         audioRecord?.apply {
             if (recordingState == AudioRecord.RECORDSTATE_RECORDING) stop()
@@ -822,11 +751,10 @@ class VoskWakeWordService : Service() {
     private fun checkPermissions(): Boolean {
         val audioPermission = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-        // Check notification permission for Android 13+
         val notificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
         } else {
-            true // Not required for Android 11-12
+            true
         }
 
         return audioPermission && notificationPermission
@@ -848,7 +776,6 @@ class VoskWakeWordService : Service() {
 
         try {
             synchronized(recognizerLock) {
-                // Use smallModel for wake word detection
                 wakeWordRecognizer = Recognizer(smallModel, 16000.0f)
             }
         } catch (e: Exception) {
@@ -864,20 +791,10 @@ class VoskWakeWordService : Service() {
         Log.i("HeyLisa", "🔁 Restarted wake word detection with small model")
     }
 
-    private fun closeSpeechRecognizerSafely() {
-        synchronized(recognizerLock) {
-            try {
-                speechRecognizer?.close()
-            } catch (_: Exception) {}
-            speechRecognizer = null
-        }
-    }
-
-    private suspend fun initModel(): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun initWakeWordModel(): Boolean = withContext(Dispatchers.IO) {
         try {
-            Log.d("HeyLisa", "📦 Initializing both models...")
+            Log.d("HeyLisa", "📦 Initializing small model for wake word detection...")
 
-            // Initialize small model for wake word detection
             val smallModelDir = File(filesDir, "vosk-model-small")
             if (!smallModelDir.exists()) {
                 if (!extractSmallModelFromAssets()) {
@@ -887,26 +804,9 @@ class VoskWakeWordService : Service() {
             smallModel = Model(smallModelDir.absolutePath)
             Log.d("HeyLisa", "✅ Small model loaded for wake word detection")
 
-            // Initialize big model for speech recognition
-            val bigModelDir = File(filesDir, "vosk-model") // Your existing big model
-            if (!bigModelDir.exists()) {
-                Log.e("HeyLisa", "❌ Big model directory not found")
-                return@withContext false
-            }
-
-            // Clean up problematic files in big model
-            val rnnlmFile = File("$bigModelDir/rnnlm/final.raw")
-            if (rnnlmFile.exists()) {
-                Log.w("HeyLisa", "Deleting rnnlm/final.raw from big model")
-                rnnlmFile.delete()
-            }
-
-            bigModel = Model(bigModelDir.absolutePath)
-            Log.d("HeyLisa", "✅ Big model loaded for speech recognition")
-
             true
         } catch (e: Exception) {
-            Log.e("HeyLisa", "❌ Failed to initialize models", e)
+            Log.e("HeyLisa", "❌ Failed to initialize wake word model", e)
             false
         }
     }
@@ -937,10 +837,8 @@ class VoskWakeWordService : Service() {
             try {
                 val subAssets = assetManager.list(assetFullPath)
                 if (subAssets != null && subAssets.isNotEmpty()) {
-                    // This is a directory, recurse
                     extractAssetFolder(assetFullPath, destinationFullPath)
                 } else {
-                    // This is a file, copy it
                     assetManager.open(assetFullPath).use { inputStream ->
                         File(destinationFullPath).outputStream().use { outputStream ->
                             inputStream.copyTo(outputStream)
@@ -954,17 +852,7 @@ class VoskWakeWordService : Service() {
         }
     }
 
-    private fun cleanRepeatedWords(text: String): String {
-        val words = text.split(" ")
-        val result = mutableListOf<String>()
-        for (i in words.indices) {
-            if (i == 0 || words[i] != words[i - 1]) {
-                result.add(words[i])
-            }
-        }
-        return result.joinToString(" ")
-    }
-
+    // Notification and utility methods (unchanged)
     private fun createNotification(content: String): Notification {
         return NotificationCompat.Builder(this, "vosk_channel")
             .setContentTitle("Hey Lisa")
@@ -1068,20 +956,19 @@ class VoskWakeWordService : Service() {
         unregisterReceiver(stateReceiver)
 
         stopListening()
-        closeSpeechRecognizerSafely()
+
+        // Clean up Android Speech Recognizer
+        androidSpeechRecognizer?.destroy()
+        androidSpeechRecognizer = null
 
         synchronized(recognizerLock) {
             wakeWordRecognizer?.close()
             wakeWordRecognizer = null
-            speechRecognizer = null
         }
 
-        // Close both models
+        // Close small model
         if (::smallModel.isInitialized) {
             smallModel.close()
-        }
-        if (::bigModel.isInitialized) {
-            bigModel.close()
         }
 
         serviceScope.cancel()
