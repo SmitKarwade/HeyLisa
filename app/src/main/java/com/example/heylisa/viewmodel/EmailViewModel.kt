@@ -216,8 +216,21 @@ class EmailViewModel(
                 handleComposeIntent(context, originalInput)
             }
             "show_chat_interface" -> {
-                handleOtherIntent(context, intentResponse, originalInput)
+                val lowerInput = originalInput.lowercase()
+                if ((lowerInput.contains("email") || lowerInput.contains("mail")) &&
+                    (lowerInput.contains("send") || lowerInput.contains("write") || lowerInput.contains("draft"))) {
+                    Log.d("EmailViewModel", "Chat interface but detected email intent - creating draft")
+                    navigateToComposer()
+                    createDraft(context, originalInput)
+                } else {
+                    _uiState.value = _uiState.value.copy(
+                        navigationEvent = NavigationEvent.ToChat
+                    )
+                    notifyProcessingComplete()
+                }
             }
+
+
             else -> {
                 when (intentResponse.intent) {
                     "compose" -> handleComposeIntent(context, originalInput)

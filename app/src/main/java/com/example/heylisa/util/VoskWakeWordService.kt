@@ -113,16 +113,28 @@ class VoskWakeWordService : Service() {
                     Log.d("HeyLisa", "📥 PROCESSING_COMPLETE received")
                     isProcessingResult = false
 
-                    // Only resume if TTS is completely done
+                    // ✅ CRITICAL FIX: Only resume if TTS is completely done AND no other recognition is active
                     if (!isTtsSpeaking && !isShuttingDown) {
                         if (isSessionActive) {
                             Log.d("HeyLisa", "🔄 Session active - starting follow-up listening")
+
+                            // ✅ STOP any existing speech recognition FIRST
+                            stopAndroidSpeechRecognizer()
+
                             serviceScope.launch {
-                                delay(1000) // Longer delay to ensure audio has settled
+                                // ✅ Clean up existing recognizer completely
+                                speechRecognitionMutex.withLock {
+                                    withContext(Dispatchers.Main) {
+                                        currentSpeechRecognizer?.destroy()
+                                        currentSpeechRecognizer = null
+                                    }
+                                }
+
+                                delay(1000) // Give time for cleanup
                                 startFollowUpListening()
                             }
                         } else {
-                            Log.d("HeyLisa", "🔄 Session ended - starting new speech recognition")
+                            Log.d("HeyLisa", "🔄 Session ended - starting new session")
                             serviceScope.launch {
                                 delay(1000)
                                 startAndroidSpeechRecognition()
@@ -610,6 +622,8 @@ class VoskWakeWordService : Service() {
                 val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val confidence = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
 
+                var hasResult = false // ✅ Add this flag to track if we got a meaningful result
+
                 if (!matches.isNullOrEmpty()) {
                     val recognizedText = matches[0].lowercase().trim()
                     val confidenceScore = confidence?.getOrNull(0) ?: 0.0f
@@ -621,6 +635,7 @@ class VoskWakeWordService : Service() {
                     val meaningfulWords = words.filterNot { it in Noisy.noisyWords }
 
                     if (meaningfulWords.isNotEmpty()) {
+                        hasResult = true // ✅ Set flag when we have meaningful words
                         val result = meaningfulWords.joinToString(" ")
 
                         serviceScope.launch {
@@ -647,10 +662,16 @@ class VoskWakeWordService : Service() {
                     }
                 }
 
-                // ✅ CRITICAL FIX: Only continue listening if conditions are met
+                // ✅ CRITICAL FIX: Don't continue if we just sent a result - processing will handle next steps
+                if (hasResult) {
+                    Log.d("HeyLisa", "🛑 Sent result to processing - not continuing speech recognition")
+                    return
+                }
+
+                // ✅ Only continue listening if conditions are met AND no processing is happening
                 if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
                     Handler(Looper.getMainLooper()).postDelayed({
-                        // Double-check conditions before restarting
+                        // Triple-check conditions before restarting
                         if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
                             Log.d("HeyLisa", "🔄 Continuing speech recognition")
                             startSpeechRecognition()
@@ -660,10 +681,11 @@ class VoskWakeWordService : Service() {
                         }
                     }, 500)
                 } else {
-                    Log.d("HeyLisa", "🛑 Not continuing speech - conditions not met")
+                    Log.d("HeyLisa", "🛑 Not continuing speech - conditions not met (processing: $isProcessingResult)")
                     endSpeechSession()
                 }
             }
+
 
             override fun onPartialResults(partialResults: Bundle?) {
                 val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
@@ -874,33 +896,34 @@ class VoskWakeWordService : Service() {
 
         Log.d("HeyLisa", "🎤 Starting follow-up listening session after TTS completion")
 
-        // Set a timeout for follow-up listening
-        val followUpTimeoutJob = serviceScope.launch {
-            delay(15000L) // 15 seconds timeout for follow-up commands
-            if (isSessionActive && !isShuttingDown) {
-                Log.d("HeyLisa", "⏰ Follow-up timeout - returning to wake word detection")
-                sendBroadcast(Intent("com.example.heylisa.FOLLOWUP_TIMEOUT"))
-                endSpeechSession()
-            }
-        }
-
         speechRecognitionMutex.withLock {
-            // Clean up any existing recognizer first
+            // ✅ CRITICAL: Clean up any existing recognizer first
             withContext(Dispatchers.Main) {
+                currentSpeechRecognizer?.stopListening()
                 currentSpeechRecognizer?.destroy()
                 currentSpeechRecognizer = null
             }
 
             if (isShuttingDown) {
-                followUpTimeoutJob.cancel()
                 return
             }
 
             Log.d("HeyLisa", "🎤 Initializing follow-up speech recognition...")
 
+            // ✅ Reset session state for follow-up
             isSessionActive = true
             speechRecognitionStartTime = System.currentTimeMillis()
             lastResultTime = System.currentTimeMillis()
+
+            // Set a timeout for follow-up listening
+            val followUpTimeoutJob = serviceScope.launch {
+                delay(15000L) // 15 seconds timeout for follow-up commands
+                if (isSessionActive && !isShuttingDown) {
+                    Log.d("HeyLisa", "⏰ Follow-up timeout - returning to wake word detection")
+                    sendBroadcast(Intent("com.example.heylisa.FOLLOWUP_TIMEOUT"))
+                    endSpeechSession()
+                }
+            }
 
             try {
                 withContext(Dispatchers.Main) {
@@ -915,7 +938,7 @@ class VoskWakeWordService : Service() {
 
                 // Monitor follow-up session with shorter timeout
                 var silenceCount = 0
-                val maxSilenceChecks = 10 // 10 seconds of silence (checked every 1 second)
+                val maxSilenceChecks = 10 // 10 seconds of silence
 
                 while (isSessionActive && !isShuttingDown && currentSpeechRecognizer != null) {
                     val currentTime = System.currentTimeMillis()
@@ -954,14 +977,6 @@ class VoskWakeWordService : Service() {
                 Log.e("HeyLisa", "❌ Follow-up listening failed", e)
                 followUpTimeoutJob.cancel()
                 endSpeechSession()
-
-                // After error, wait a bit then return to wake word detection
-                serviceScope.launch {
-                    delay(2000)
-                    if (!isShuttingDown) {
-                        startWakeWordDetection()
-                    }
-                }
             }
         }
     }
