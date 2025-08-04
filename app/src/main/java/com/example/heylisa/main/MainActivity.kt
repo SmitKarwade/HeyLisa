@@ -33,6 +33,8 @@ import com.example.heylisa.ui.theme.HeyLisaTheme
 import com.example.heylisa.util.*
 import java.io.File
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.google.firebase.FirebaseApp
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 
 class MainActivity : ComponentActivity() {
 
@@ -96,6 +98,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = true
+
+        FirebaseApp.initializeApp(this);
+        FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = true;
 
         // Register model initialization receiver
         val filter = IntentFilter().apply {

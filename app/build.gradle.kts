@@ -2,6 +2,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 
 }
 
@@ -42,6 +44,10 @@ android {
         compose = true
     }
 
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.5"
+    }
+
     packaging {
         resources {
             excludes.add("META-INF/DEPENDENCIES")
@@ -68,6 +74,10 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.2")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    implementation("com.google.firebase:firebase-crashlytics-ktx:19.4.4")
+    implementation("com.google.firebase:firebase-analytics-ktx:22.5.0")
+
 
 
     implementation(libs.androidx.core.ktx)
