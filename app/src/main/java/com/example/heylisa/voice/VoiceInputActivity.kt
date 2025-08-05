@@ -388,11 +388,11 @@ class VoiceInputActivity : ComponentActivity() {
         modifier: Modifier = Modifier
     ) {
         // ✅ Make the entire content scrollable within the available space
-        val scrollState = rememberScrollState()
+        //val scrollState = rememberScrollState()
 
         Column(
             modifier = modifier
-                .verticalScroll(scrollState) // ✅ Scrollable within allocated space
+//                .verticalScroll(scrollState) // ✅ Scrollable within allocated space
                 .padding(vertical = 4.dp)
                 .imePadding(), // ✅ Handle keyboard here instead
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -421,7 +421,7 @@ class VoiceInputActivity : ComponentActivity() {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp), // ✅ Fixed height
+                        .weight(1f),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
                     border = androidx.compose.foundation.BorderStroke(
                         1.dp,

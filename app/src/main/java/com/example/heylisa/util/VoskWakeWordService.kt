@@ -77,9 +77,16 @@ class VoskWakeWordService : Service() {
 
     // Android Speech Recognition state
     private var speechRecognitionStartTime = 0L
-    private val MAX_SPEECH_RECOGNITION_TIME = 60000L // 60 seconds max
-    private val MEANINGFUL_SILENCE_TIMEOUT = 8000L // 8 seconds
     private var lastResultTime = 0L
+    // ------------- timing constants -------------
+    private val MAX_SESSION_MS        = 60_000L   // 60 s hard cap
+    private val START_SPEAK_MS        = 5_000L    // must begin within 5 s
+    private val SILENCE_END_MS        = 3_000L
+    // inside class
+    private var speechStarted          = false
+    private var startSpeechTimeoutTask: Job? = null
+
+
 
     // Minimal broadcast receiver - only restore wake word
     private val stateReceiver = object : BroadcastReceiver() {
@@ -486,37 +493,21 @@ class VoskWakeWordService : Service() {
                     }
 
                     while (isSessionActive && !isShuttingDown && currentSpeechRecognizer != null) {
-                        val currentTime = System.currentTimeMillis()
-                        val sessionDuration = currentTime - speechRecognitionStartTime
-                        val timeSinceLastResult = currentTime - lastResultTime
+                        val now = System.currentTimeMillis()
+                        val sinceLast = now - lastResultTime
+                        val total     = now - speechRecognitionStartTime
 
-                        // ✅ CRITICAL FIX: If TTS starts, break out of monitoring loop
-                        if (isTtsSpeaking) {
-                            Log.d("HeyLisa", "🔊 TTS started during speech recognition - breaking monitoring loop")
-                            break
-                        }
-
-                        // Check if speech recognition never started properly
-                        if (sessionDuration > 5000 && lastResultTime == speechRecognitionStartTime) {
-                            Log.w("HeyLisa", "⚠️ Speech recognition not responding - restarting")
-                            endSpeechSession()
-                            delay(1000)
-                            if (!isTtsSpeaking && !isProcessingResult) {
-                                startWakeWordDetection()
-                            }
-                            break
-                        }
-
-                        // ✅ INCREASED TIMEOUT: Give more time for processing
-                        if (sessionDuration >= MAX_SPEECH_RECOGNITION_TIME ||
-                            timeSinceLastResult >= 15000L) { // Increased from 8s to 15s
-
-                            Log.d("HeyLisa", "🏁 Session timeout - ending speech recognition")
+                        // our own silence detector – 3 consecutive seconds
+                        if (speechStarted && sinceLast >= SILENCE_END_MS) {
                             endSpeechSession()
                             break
                         }
 
-                        delay(1000)
+                        if (total >= MAX_SESSION_MS) {
+                            endSpeechSession()
+                            break
+                        }
+                        delay(1_000L)
                     }
                 } catch (e: Exception) {
                     Log.e("HeyLisa", "Speech recognition failed to start", e)
@@ -544,24 +535,30 @@ class VoskWakeWordService : Service() {
 
         currentSpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         currentSpeechRecognizer?.setRecognitionListener(object : RecognitionListener {
+
+            @RequiresPermission(
+                android.Manifest.permission.RECORD_AUDIO
+            )
             override fun onReadyForSpeech(params: Bundle?) {
-                Log.d("HeyLisa", "🎤 Android Speech Recognizer ready for speech")
-                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
-                    putExtra("state", "speech_recognition_started")
-                })
+                speechStarted = false
+                startSpeechTimeoutTask?.cancel()
+                startSpeechTimeoutTask = serviceScope.launch {
+                    delay(START_SPEAK_MS)
+                    if (!speechStarted) endSpeechSession()       // user never spoke
+                }
             }
 
             override fun onBeginningOfSpeech() {
-                Log.d("HeyLisa", "🗣️ Beginning of speech detected")
+                speechStarted = true
+                startSpeechTimeoutTask?.cancel()
                 lastResultTime = System.currentTimeMillis()
             }
 
+            /* Ignore onEndOfSpeech – we will decide based on our own timer */
+            override fun onEndOfSpeech() { /* no-op */ }
+
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
-
-            override fun onEndOfSpeech() {
-                Log.d("HeyLisa", "🔚 End of speech detected")
-            }
 
             @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
             override fun onError(error: Int) {
@@ -703,17 +700,22 @@ class VoskWakeWordService : Service() {
         })
     }
 
-    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startSpeechRecognition() {
         if (!isSessionActive || currentSpeechRecognizer == null) return
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+
+            // 3-second ceiling; the engine *may* stop earlier, so we guard for that.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                SILENCE_END_MS)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                SILENCE_END_MS)
         }
 
         try {
@@ -900,9 +902,8 @@ class VoskWakeWordService : Service() {
 
             // Set a timeout for follow-up listening
             val followUpTimeoutJob = serviceScope.launch {
-                delay(15000L) // 15 seconds timeout for follow-up commands
+                delay(MAX_SESSION_MS + 2_000L)              // 62 s safety cap
                 if (isSessionActive && !isShuttingDown) {
-                    Log.d("HeyLisa", "⏰ Follow-up timeout - returning to wake word detection")
                     sendBroadcast(Intent("com.example.heylisa.FOLLOWUP_TIMEOUT"))
                     endSpeechSession()
                 }
@@ -921,33 +922,24 @@ class VoskWakeWordService : Service() {
 
                 // Monitor follow-up session with shorter timeout
                 var silenceCount = 0
-                val maxSilenceChecks = 10 // 10 seconds of silence
+                val maxSilenceChecks = 3          // 3 consecutive seconds
 
                 while (isSessionActive && !isShuttingDown && currentSpeechRecognizer != null) {
-                    val currentTime = System.currentTimeMillis()
-                    val timeSinceLastResult = currentTime - lastResultTime
+                    val now = System.currentTimeMillis()
+                    val sinceLast = now - lastResultTime
+                    val total     = now - speechRecognitionStartTime
 
-                    // Check for silence every second
-                    if (timeSinceLastResult >= 1000L) {
-                        silenceCount++
-                        Log.d("HeyLisa", "🔇 Follow-up silence count: $silenceCount/$maxSilenceChecks")
-
-                        if (silenceCount >= maxSilenceChecks) {
-                            Log.d("HeyLisa", "🏁 Follow-up silence timeout (${silenceCount}s) - ending session")
-                            break
-                        }
-                    } else {
-                        silenceCount = 0 // Reset silence count if we got recent input
-                    }
-
-                    // Overall session timeout (15 seconds total)
-                    val totalSessionTime = currentTime - speechRecognitionStartTime
-                    if (totalSessionTime >= 15000L) {
-                        Log.d("HeyLisa", "🏁 Follow-up total timeout (15s) - ending session")
+                    // our own silence detector – 3 consecutive seconds
+                    if (speechStarted && sinceLast >= SILENCE_END_MS) {
+                        endSpeechSession()
                         break
                     }
 
-                    delay(1000) // Check every second
+                    if (total >= MAX_SESSION_MS) {
+                        endSpeechSession()
+                        break
+                    }
+                    delay(1_000L)
                 }
 
                 Log.d("HeyLisa", "🔚 Follow-up listening session ended")
