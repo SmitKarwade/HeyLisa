@@ -98,13 +98,10 @@ class VoskWakeWordService : Service() {
                     isTtsSpeaking = true
                     sessionPaused = true
 
-                    // ✅ Stop Android speech recognizer
                     stopAndroidSpeechRecognizer()
 
-                    // ✅ ALSO stop wake word detection
                     stopListening()
 
-                    // ✅ Cancel any running wake word job
                     wakeWordJob?.cancel()
 
                     Log.d("HeyLisa", "🛑 All audio recognition stopped for TTS")
@@ -123,14 +120,13 @@ class VoskWakeWordService : Service() {
                     val expectFollowUp = intent?.getBooleanExtra("expect_follow_up", true) ?: true
                     Log.d("HeyLisa", "📥 PROCESSING_COMPLETE (expectFollowUp=$expectFollowUp)")
 
-                    // Always stop any residual recognizer from the previous session
                     stopAndroidSpeechRecognizer()
 
                     if (!isShuttingDown && !isTtsSpeaking) {
                         if (expectFollowUp) {
                             Log.d("HeyLisa", "🔄 Starting follow-up listening")
                             serviceScope.launch {
-                                delay(800)          // let audio settle
+                                delay(800)
                                 startFollowUpListening()
                             }
                         } else {
@@ -152,7 +148,7 @@ class VoskWakeWordService : Service() {
                     Log.d("HeyLisa", "⏰ Follow-up session timed out - returning to wake word")
                     isSessionActive = false
                     serviceScope.launch {
-                        delay(1000) // Small delay before restarting wake word
+                        delay(1000)
                         if (!isShuttingDown && !isTtsSpeaking) {
                             startWakeWordDetection()
                         }
@@ -593,7 +589,6 @@ class VoskWakeWordService : Service() {
                         // ✅ Only restart for main sessions, not follow-up
                         if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
                             Handler(Looper.getMainLooper()).postDelayed({
-                                // Double-check conditions before restarting
                                 if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult && !inFollowUp) {
                                     Log.d("HeyLisa", "🔄 Restarting speech recognition after no match/timeout (main session)")
                                     startSpeechRecognition()
@@ -920,16 +915,12 @@ class VoskWakeWordService : Service() {
                     }
                 }
 
-                // Monitor follow-up session with shorter timeout
-                var silenceCount = 0
-                val maxSilenceChecks = 3          // 3 consecutive seconds
 
                 while (isSessionActive && !isShuttingDown && currentSpeechRecognizer != null) {
                     val now = System.currentTimeMillis()
                     val sinceLast = now - lastResultTime
                     val total     = now - speechRecognitionStartTime
 
-                    // our own silence detector – 3 consecutive seconds
                     if (speechStarted && sinceLast >= SILENCE_END_MS) {
                         endSpeechSession()
                         break
