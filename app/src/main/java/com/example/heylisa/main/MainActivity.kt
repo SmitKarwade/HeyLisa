@@ -18,19 +18,26 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.heylisa.auth.App
 import com.example.heylisa.ui.theme.HeyLisaTheme
 import com.example.heylisa.util.*
+import com.example.heylisa.voice.VoiceInputActivity
 import java.io.File
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.firebase.FirebaseApp
@@ -263,6 +270,19 @@ class MainActivity : ComponentActivity() {
         maybeStartServiceIfReady()
     }
 
+    fun launchVoiceInputActivity() {
+        val intent = Intent(this, VoiceInputActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_NO_ANIMATION
+
+            putExtra("launched_from_swipe", true) // Update identifier
+        }
+
+        startActivity(intent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {
@@ -280,7 +300,34 @@ fun MainScreen(
     onSignOut: () -> Unit,
     isModelInitializing: Boolean
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    var swipeProgress by remember { mutableFloatStateOf(0f) }
+    val animatedProgress by animateFloatAsState(
+        targetValue = swipeProgress,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = {
+                        swipeProgress = 0f
+                    },
+                    onDragEnd = {
+                        if (swipeProgress >= 0.1f) { // 30% swipe threshold
+                            Log.d("MainScreen", "Swipe threshold reached - launching VoiceInputActivity")
+                            (context as? MainActivity)?.launchVoiceInputActivity()
+                        }
+                        swipeProgress = 0f
+                    }
+                ) { _, dragAmount ->
+                    if (dragAmount.y < 0) { // Upward drag
+                        swipeProgress = minOf(1f, swipeProgress + (-dragAmount.y / size.height) * 3f)
+                    }
+                }
+            }
+    ) {
         var currentScreen by remember { mutableStateOf("main") }
         val context = LocalContext.current
 
@@ -299,6 +346,19 @@ fun MainScreen(
                     onNavigateBack = { currentScreen = "main" }
                 )
             }
+        }
+
+        if (animatedProgress > 0f) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .background(
+                        Color.Blue.copy(alpha = animatedProgress),
+                        RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp)
+                    )
+            )
         }
 
         // Model initialization loading overlay

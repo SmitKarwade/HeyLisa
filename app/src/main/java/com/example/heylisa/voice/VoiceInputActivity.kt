@@ -39,6 +39,7 @@ import com.example.heylisa.constant.Noisy
 import com.example.heylisa.viewmodel.EmailViewModel
 import com.example.heylisa.request.DraftResponse
 import com.example.heylisa.service.CustomTtsService
+import com.example.heylisa.util.VoskWakeWordService
 
 class VoiceInputActivity : ComponentActivity() {
 
@@ -69,6 +70,12 @@ class VoiceInputActivity : ComponentActivity() {
                 "com.example.heylisa.CLEAR_TEXT" -> {
                     partialText.value = ""
                 }
+
+                "com.example.heylisa.SPEECH_START_ERROR" -> {
+                    val error = intent.getStringExtra("error") ?: "Unknown error"
+                    Log.e("VoiceInputActivity", "Speech start error: $error")
+                    showToast("Failed to start listening: $error")
+                }
             }
         }
     }
@@ -81,14 +88,15 @@ class VoiceInputActivity : ComponentActivity() {
                     when (state) {
                         "wake_word_detected" -> {
                             Log.d("VoiceInputActivity", "Wake word detected")
+                            // Don't set isListening here yet - wait for speech_recognition_started
                         }
                         "speech_recognition_started" -> {
                             isListening.value = true
-                            Log.d("VoiceInputActivity", "Speech recognition started")
+                            Log.d("VoiceInputActivity", "Speech recognition started - animation should begin")
                         }
                         "wake_word_listening" -> {
                             isListening.value = false
-                            Log.d("VoiceInputActivity", "Back to wake word listening")
+                            Log.d("VoiceInputActivity", "Back to wake word listening - animation should stop")
                         }
                     }
                 }
@@ -135,6 +143,7 @@ class VoiceInputActivity : ComponentActivity() {
             addAction("com.example.heylisa.PARTIAL_TEXT")
             addAction("com.example.heylisa.CLEAR_TEXT")
             addAction("com.example.heylisa.RECOGNIZED_TEXT")
+            addAction("com.example.heylisa.SPEECH_START_ERROR")
         }
 
         val stateFilter = IntentFilter().apply {
@@ -315,7 +324,7 @@ class VoiceInputActivity : ComponentActivity() {
             ) {
                 HeyLisaBar(
                     text = partialText,
-                    onMicClick = { /* Handled by broadcast receiver */ },
+                    onMicClick = { safeStartSpeechRecognition() },
                     onSendClick = {
                         if (partialText.value.isNotEmpty() && !isTtsSpeaking.value) {
                             emailViewModel.processUserInput(this@VoiceInputActivity, partialText.value)
@@ -328,6 +337,30 @@ class VoiceInputActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun safeStartSpeechRecognition() {
+        if (!isListening.value && !isTtsSpeaking.value) {
+            try {
+                Log.d("VoiceInputActivity", "🎤 Requesting manual speech recognition")
+
+                // Send intent to service to start speech recognition
+                val intent = Intent(VoskWakeWordService.ACTION_START_SPEECH_RECOGNITION)
+                sendBroadcast(intent)
+
+            } catch (e: Exception) {
+                Log.e("VoiceInputActivity", "Failed to request speech recognition: ${e.message}")
+                showToast("Unable to start listening. Please try again.")
+            }
+        } else {
+            Log.d("VoiceInputActivity", "🛑 Speech recognition conditions not met")
+            if (isListening.value) {
+                showToast("Already listening...")
+            } else if (isTtsSpeaking.value) {
+                showToast("Please wait for voice response to finish")
+            }
+        }
+    }
+
 
     @Composable
     fun LoadingOverlay() {
@@ -599,6 +632,7 @@ class VoiceInputActivity : ComponentActivity() {
         partialText.value = ""
         finalText.value = ""
     }
+
 
     override fun onDestroy() {
         super.onDestroy()

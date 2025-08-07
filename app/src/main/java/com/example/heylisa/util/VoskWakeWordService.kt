@@ -13,7 +13,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
@@ -86,6 +88,11 @@ class VoskWakeWordService : Service() {
     private var speechStarted          = false
     private var startSpeechTimeoutTask: Job? = null
 
+    companion object {
+        const val ACTION_START_SPEECH_RECOGNITION = "com.example.heylisa.START_SPEECH_RECOGNITION"
+        const val ACTION_STOP_SPEECH_RECOGNITION = "com.example.heylisa.STOP_SPEECH_RECOGNITION"
+    }
+
 
 
     // Minimal broadcast receiver - only restore wake word
@@ -155,6 +162,16 @@ class VoskWakeWordService : Service() {
                     }
                 }
 
+                ACTION_START_SPEECH_RECOGNITION -> {
+                    Log.d("HeyLisa", "🎤 Received manual speech start request")
+                    handleManualSpeechStart()
+                }
+
+                ACTION_STOP_SPEECH_RECOGNITION -> {
+                    Log.d("HeyLisa", "🛑 Received manual speech stop request")
+                    handleManualSpeechStop()
+                }
+
                 "com.example.heylisa.RESTORE_WAKE_WORD" -> {
                     if (isShuttingDown || !::smallModel.isInitialized) {
                         Log.w("HeyLisa", "⚠️ Ignored restart — service is shutting down or model is not ready")
@@ -187,14 +204,36 @@ class VoskWakeWordService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) return START_STICKY
+
+        when (intent.action) {
+            ACTION_START_SPEECH_RECOGNITION -> {
+                Log.d("HeyLisa", "🎤 Manual speech recognition requested via intent")
+                handleManualSpeechStart()
+            }
+            ACTION_STOP_SPEECH_RECOGNITION -> {
+                Log.d("HeyLisa", "🛑 Manual speech recognition stop requested")
+                handleManualSpeechStop()
+            }
+            else -> {
+                Log.d("HeyLisa", "Unknown intent action: ${intent.action}")
+            }
+        }
         return START_STICKY
+    }
+
+    private fun configureAudioForCapture() {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL)
     }
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
     override fun onCreate() {
         super.onCreate()
+        configureAudioForCapture()
 
         // Force reset all states on service creation
         isSessionActive = false
@@ -209,6 +248,8 @@ class VoskWakeWordService : Service() {
             addAction("com.example.heylisa.PROCESSING_COMPLETE")
             addAction("com.example.heylisa.RESTORE_WAKE_WORD")
             addAction("com.example.heylisa.FORCE_RESTART")
+            addAction(ACTION_START_SPEECH_RECOGNITION)
+            addAction(ACTION_STOP_SPEECH_RECOGNITION)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(stateReceiver, stateFilter, RECEIVER_EXPORTED)
@@ -369,8 +410,28 @@ class VoskWakeWordService : Service() {
                         }
 
                         if (read > 0) {
-                            synchronized(recognizerLock) {
-                                wakeWordRecognizer?.acceptWaveForm(buffer, read)
+                            val isFinal = synchronized(recognizerLock) {
+                                wakeWordRecognizer?.acceptWaveForm(buffer, read) ?: false
+                            }
+
+                            if (isFinal) {
+                                val finalResult = synchronized(recognizerLock) {
+                                    wakeWordRecognizer?.result
+                                }
+                                val finalText = Regex("\"text\"\\s*:\\s*\"(.*?)\"")
+                                    .find(finalResult ?: "")?.groupValues?.getOrNull(1)
+                                    ?.lowercase()?.trim()
+                                if (!finalText.isNullOrEmpty()) {
+                                    val words = finalText.split("\\s+".toRegex()).filter { it.isNotBlank() }
+                                    val meaningfulWords = words.filterNot { it in Noisy.noisyWords }
+                                    if (meaningfulWords.isNotEmpty()) {
+                                        val displayText = meaningfulWords.joinToString(" ")
+                                        // --- Toast will always show, EVEN IF wake word! ---
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(this@VoskWakeWordService, displayText, Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
                             }
 
                             val partial = synchronized(recognizerLock) {
@@ -398,26 +459,21 @@ class VoskWakeWordService : Service() {
                                         if (validateWakeWordWithFinalResult()) {
                                             Log.i("HeyLisa", "✅ Wake word CONFIRMED!")
 
-//                                            withContext(Dispatchers.Main) {
-//                                                Toast.makeText(
-//                                                    this@VoskWakeWordService,
-//                                                    "Hey Lisa detected!",
-//                                                    Toast.LENGTH_SHORT
-//                                                ).show()
-//                                            }
-
                                             stopListening()
 
                                             serviceScope.launch {
-                                                delay(500)
 
-                                                // Launch VoiceInputActivity
+                                                stopListening()
+                                                delay(200)
+
                                                 launchVoiceInputActivity()
+                                                delay(200)
 
                                                 sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
-                                                    putExtra("state", "wake_word_detected")
+                                                    putExtra("state", "speech_recognition_started")
                                                 })
-                                                showWakeWordDetectedNotification()
+
+                                                delay(300)
                                                 startAndroidSpeechRecognition()
                                             }
                                             break
@@ -653,13 +709,11 @@ class VoskWakeWordService : Service() {
                     }
                 }
 
-                // ✅ CRITICAL FIX: Don't continue if we just sent a result - processing will handle next steps
                 if (hasResult) {
                     Log.d("HeyLisa", "🛑 Sent result to processing - not continuing speech recognition")
                     return
                 }
 
-                // ✅ Only continue listening if conditions are met AND no processing is happening
                 if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
                     Handler(Looper.getMainLooper()).postDelayed({
                         // Triple-check conditions before restarting
@@ -743,7 +797,6 @@ class VoskWakeWordService : Service() {
 
             sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
 
-            // ✅ CRITICAL FIX: Only restart wake word if TTS is NOT speaking and NOT processing
             if (!isShuttingDown && !isTtsSpeaking && !isProcessingResult) {
                 sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
                     putExtra("state", "wake_word_listening")
@@ -828,7 +881,7 @@ class VoskWakeWordService : Service() {
 
             val exactMatches = setOf(
                 "hey lisa", "hi lisa", "hello lisa",
-                "he lisa", "hey liza", "hi liza"
+                "he lisa", "hey liza", "hi liza", "elissa", "elisa"
             )
 
             val isValid = exactMatches.any { finalText.contains(it) }
@@ -981,6 +1034,67 @@ class VoskWakeWordService : Service() {
 
         return audioPermission && notificationPermission
     }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun handleManualSpeechStart() {
+        serviceScope.launch {
+            try {
+                // Check conditions to prevent conflicts
+                if (isShuttingDown) {
+                    Log.w("HeyLisa", "🛑 Cannot start speech - service shutting down")
+                    return@launch
+                }
+
+                if (isTtsSpeaking) {
+                    Log.w("HeyLisa", "🛑 Cannot start speech - TTS is speaking")
+                    return@launch
+                }
+
+                if (isSessionActive && currentSpeechRecognizer != null) {
+                    Log.w("HeyLisa", "🛑 Speech recognition already active")
+                    return@launch
+                }
+
+                // Stop wake word detection to avoid conflicts
+                if (isListening) {
+                    Log.d("HeyLisa", "🛑 Stopping wake word detection for manual speech")
+                    stopListening()
+                }
+
+                // Small delay to ensure cleanup
+                delay(500)
+
+                // Start Android speech recognition
+                Log.d("HeyLisa", "🚀 Starting manual speech recognition")
+                startAndroidSpeechRecognition()
+
+                // Broadcast that speech recognition started
+                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                    putExtra("state", "speech_recognition_started")
+                })
+
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "Failed to start manual speech recognition", e)
+                // Send error broadcast to UI
+                sendBroadcast(Intent("com.example.heylisa.SPEECH_START_ERROR").apply {
+                    putExtra("error", e.message)
+                })
+            }
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private fun handleManualSpeechStop() {
+        serviceScope.launch {
+            try {
+                Log.d("HeyLisa", "🛑 Manually stopping speech recognition")
+                endSpeechSession()
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "Error stopping manual speech recognition", e)
+            }
+        }
+    }
+
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun restartAudioRecordAndRecognizer() {
