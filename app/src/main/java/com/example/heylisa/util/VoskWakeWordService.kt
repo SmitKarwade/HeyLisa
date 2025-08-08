@@ -734,11 +734,16 @@ class VoskWakeWordService : Service() {
                 val words = transcription.lowercase().trim().split(" ")
                 val meaningfulWords = words.filterNot { it in Noisy.noisyWords }
 
-                if (meaningfulWords.isNotEmpty()) {
+                // ✅ Add filtering for "no speech detected" here
+                val isValidTranscription = meaningfulWords.isNotEmpty() &&
+                        !transcription.lowercase().contains("no speech detected") &&
+                        !transcription.lowercase().contains("speech not detected")
+
+                if (isValidTranscription) {
                     val result = meaningfulWords.joinToString(" ")
                     Log.d("HeyLisa", "🎯 Whisper result: '$result'")
 
-                    // ✅ Send result BEFORE ending session
+
                     sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
                         putExtra("result", result)
                         putExtra("source", "whisper")
@@ -748,23 +753,46 @@ class VoskWakeWordService : Service() {
                     delay(300)
                     sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
 
-                    // ✅ Don't call endWhisperSession() here - let PROCESSING_COMPLETE handle it
+
+                    sendBroadcast(Intent("com.example.heylisa.PROCESSING_COMPLETE").apply {
+                        putExtra("expect_follow_up", true)
+                    })
+
                     Log.d("HeyLisa", "✅ Transcription processing completed successfully")
                 } else {
-                    Log.d("HeyLisa", "❌ No meaningful words in Whisper result")
+                    Log.d("HeyLisa", "❌ No meaningful words or invalid transcription: '$transcription'")
+
+                    sendBroadcast(Intent("com.example.heylisa.PROCESSING_COMPLETE").apply {
+                        putExtra("expect_follow_up", false)
+                    })
+
                     endWhisperSession()
                 }
             } else {
                 Log.w("HeyLisa", "⚠️ Empty transcription from Whisper")
+
+                sendBroadcast(Intent("com.example.heylisa.PROCESSING_COMPLETE").apply {
+                    putExtra("expect_follow_up", false)
+                })
+
                 endWhisperSession()
             }
 
         } catch (e: kotlinx.coroutines.CancellationException) {
-            // ✅ Handle cancellation gracefully
             Log.w("HeyLisa", "⚠️ Whisper processing was cancelled (this is normal during cleanup)")
-            throw e // Re-throw to maintain coroutine cancellation behavior
+
+            sendBroadcast(Intent("com.example.heylisa.PROCESSING_COMPLETE").apply {
+                putExtra("expect_follow_up", false)
+            })
+
+            throw e
         } catch (e: Exception) {
             Log.e("HeyLisa", "Error processing audio with Whisper", e)
+
+            sendBroadcast(Intent("com.example.heylisa.PROCESSING_COMPLETE").apply {
+                putExtra("expect_follow_up", false)
+            })
+
             endWhisperSession()
         }
     }
@@ -774,15 +802,15 @@ class VoskWakeWordService : Service() {
     private fun endWhisperSession() {
         Log.d("HeyLisa", "🏁 Ending Whisper session")
 
-        // ✅ Reset all session flags
+        // Reset all session flags
         isSessionActive = false
         isWhisperRecording = false
         inFollowUp = false
 
-        // ✅ Clean up audio resources
+        // Clean up audio resources
         stopWhisperRecordingInternal()
 
-        // ✅ Cancel and clean up the job
+        // Cancel and clean up the job
         speechRecognitionJob?.cancel()
         speechRecognitionJob = null
 
@@ -804,6 +832,7 @@ class VoskWakeWordService : Service() {
             }
         }
     }
+
 
     private fun isNetworkAvailable(): Boolean {
         val connectivityManager =
@@ -931,6 +960,10 @@ class VoskWakeWordService : Service() {
             audioRecord?.startRecording()
             isListening = true
 
+            sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                putExtra("state", "wake_word_listening")
+            })
+
             wakeWordJob = serviceScope.launch {
                 var consecutiveZeroReads = 0
                 val maxZeroReads = 50
@@ -1037,6 +1070,10 @@ class VoskWakeWordService : Service() {
                 }
 
                 Log.d("HeyLisa", "🏁 Wake word detection loop ended")
+
+                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                    putExtra("state", "wake_word_detection_stopped")
+                })
             }
         }
     }

@@ -277,10 +277,12 @@ class MainActivity : ComponentActivity() {
                     Intent.FLAG_ACTIVITY_SINGLE_TOP or
                     Intent.FLAG_ACTIVITY_NO_ANIMATION
 
-            putExtra("launched_from_swipe", true) // Update identifier
+            putExtra("manual_trigger", true)
+            putExtra("launched_from_swipe", true)
         }
 
         startActivity(intent)
+        Log.d("MainActivity", "🚀 Launched VoiceInputActivity with chat dialog from swipe")
     }
 
     override fun onDestroy() {
@@ -313,17 +315,26 @@ fun MainScreen(
                 detectDragGestures(
                     onDragStart = {
                         swipeProgress = 0f
+                        Log.d("MainScreen", "🔍 Swipe started")
                     },
                     onDragEnd = {
-                        if (swipeProgress >= 0.1f) { // 30% swipe threshold
-                            Log.d("MainScreen", "Swipe threshold reached - launching VoiceInputActivity")
+                        if (swipeProgress >= 0.1f) {
+                            Log.d("MainScreen", "🚀 Swipe threshold reached (${(swipeProgress * 100).toInt()}%) - launching chat dialog")
                             (context as? MainActivity)?.launchVoiceInputActivity()
+                        } else {
+                            Log.d("MainScreen", "❌ Swipe not enough (${(swipeProgress * 100).toInt()}%)")
                         }
                         swipeProgress = 0f
                     }
                 ) { _, dragAmount ->
                     if (dragAmount.y < 0) { // Upward drag
-                        swipeProgress = minOf(1f, swipeProgress + (-dragAmount.y / size.height) * 3f)
+                        val newProgress = swipeProgress + (-dragAmount.y / size.height) * 2f
+                        swipeProgress = minOf(1f, newProgress)
+
+                        if (swipeProgress >= 0.05f && swipeProgress - (-dragAmount.y / size.height) * 2f < 0.05f) {
+                            // First time crossing threshold - you can add haptic feedback here
+                            Log.d("MainScreen", "✨ Swipe threshold reached!")
+                        }
                     }
                 }
             }
@@ -349,19 +360,45 @@ fun MainScreen(
         }
 
         if (animatedProgress > 0f) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .background(
-                        Color.Blue.copy(alpha = animatedProgress),
-                        RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp)
-                    )
-            )
+            Column(
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                // Swipe indicator text
+                if (animatedProgress >= 0.03f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color.Blue.copy(alpha = 0.1f)
+                        ) {
+                            Text(
+                                text = if (animatedProgress >= 0.05f) "Release to open Hey Lisa" else "Swipe up to open Hey Lisa",
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                color = Color.Black,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+
+                // Progress bar
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(if (animatedProgress >= 0.05f) 6.dp else 4.dp)
+                        .background(
+                            if (animatedProgress >= 0.05f) Color.Blue.copy(alpha = 0.3f) else Color.Blue.copy(alpha = animatedProgress),
+                            RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)
+                        )
+                )
+            }
         }
 
-        // Model initialization loading overlay
         if (isModelInitializing) {
             Box(
                 modifier = Modifier
@@ -374,6 +411,12 @@ fun MainScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     PulsingLoadingDots()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Initializing Hey Lisa...",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }
