@@ -18,14 +18,11 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
-import android.os.Bundle
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.PowerManager
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 import android.widget.Toast
@@ -39,6 +36,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -46,16 +44,25 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.vosk.Model
 import org.vosk.Recognizer
 import java.io.File
-import java.util.Locale
+import java.io.ByteArrayOutputStream
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.asRequestBody
+import org.json.JSONObject
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class VoskWakeWordService : Service() {
 
     private lateinit var smallModel: Model  // Only for wake word detection
     private var wakeWordRecognizer: Recognizer? = null
-    private var currentSpeechRecognizer: SpeechRecognizer? = null  // Singleton speech recognizer
     private var audioRecord: AudioRecord? = null
 
     @Volatile private var isListening = false
@@ -77,23 +84,118 @@ class VoskWakeWordService : Service() {
     private var speechRecognitionJob: Job? = null
     private var wakeWordJob: Job? = null
 
-    // Android Speech Recognition state
-    private var speechRecognitionStartTime = 0L
-    private var lastResultTime = 0L
-    // ------------- timing constants -------------
-    private val MAX_SESSION_MS        = 60_000L   // 60 s hard cap
-    private val START_SPEAK_MS        = 5_000L    // must begin within 5 s
-    private val SILENCE_END_MS        = 3_000L
-    // inside class
-    private var speechStarted          = false
-    private var startSpeechTimeoutTask: Job? = null
+    private val MAX_SESSION_MS = 60_000L   // 60 s hard cap
 
     companion object {
         const val ACTION_START_SPEECH_RECOGNITION = "com.example.heylisa.START_SPEECH_RECOGNITION"
         const val ACTION_STOP_SPEECH_RECOGNITION = "com.example.heylisa.STOP_SPEECH_RECOGNITION"
+        const val MAX_RECORDING_DURATION_MS = 60_000L
+        const val MIN_RECORDING_DURATION_MS = 1_000L
+        const val SILENCE_THRESHOLD_MS = 4_000L
+        const val VOICE_ACTIVITY_THRESHOLD = 600
+        const val NO_VOICE_TIMEOUT_MS = 10_000L
     }
 
 
+    // Add these class-level variables
+    private var whisperAudioRecord: AudioRecord? = null
+    private var isWhisperRecording = false
+    private var audioBuffer = ByteArrayOutputStream()
+    private val audioChunks = mutableListOf<ByteArray>()
+    private var recordingStartTime = 0L
+    private var lastVoiceActivity = 0L
+
+    // Audio recording configuration
+    private val SAMPLE_RATE = 16000
+    private val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
+    private val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+    private val BYTES_PER_SAMPLE = 2
+
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS) // Whisper can take time
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    private suspend fun sendToWhisperAPI(audioFile: File): String? = withContext(Dispatchers.IO) {
+        try {
+            Log.d("HeyLisa", "📡 Sending ${audioFile.length()} bytes to Whisper API...")
+
+            // Simple multipart form with just the file
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart(
+                    "audio",
+                    audioFile.name,
+                    audioFile.asRequestBody("audio/wav".toMediaTypeOrNull())
+                )
+                .build()
+
+            // Clean request with no extra headers
+            val request = Request.Builder()
+                .url("https://api.neeja.io/api/transcribe/")
+                .post(requestBody)
+                .build()
+
+            // Execute and get response
+            httpClient.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string()
+
+                Log.d("HeyLisa", "📬 Response code: ${response.code}")
+                Log.d("HeyLisa", "📬 Response: $responseBody")
+
+                if (!response.isSuccessful) {
+                    Log.e("HeyLisa", "❌ API failed: ${response.code} - $responseBody")
+                    return@withContext null
+                }
+
+                if (responseBody.isNullOrEmpty()) {
+                    Log.e("HeyLisa", "❌ Empty response")
+                    return@withContext null
+                }
+
+                return@withContext parseWhisperResponse(responseBody)
+            }
+
+        } catch (e: Exception) {
+            Log.e("HeyLisa", "❌ API call failed", e)
+            return@withContext null
+        }
+    }
+
+
+    private fun parseWhisperResponse(responseJson: String): String? {
+        return try {
+            val jsonObject = JSONObject(responseJson)
+
+            // Adjust these field names based on the actual API response structure
+            when {
+                jsonObject.has("text") -> {
+                    val transcription = jsonObject.getString("text").trim()
+                    Log.d("HeyLisa", "✅ Transcription received: '$transcription'")
+                    transcription
+                }
+                jsonObject.has("transcription") -> {
+                    val transcription = jsonObject.getString("transcription").trim()
+                    Log.d("HeyLisa", "✅ Transcription received: '$transcription'")
+                    transcription
+                }
+                jsonObject.has("result") -> {
+                    val transcription = jsonObject.getString("result").trim()
+                    Log.d("HeyLisa", "✅ Transcription received: '$transcription'")
+                    transcription
+                }
+                else -> {
+                    Log.w("HeyLisa", "Unknown response format: $responseJson")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("HeyLisa", "Error parsing Whisper response: $responseJson", e)
+            null
+        }
+    }
 
     // Minimal broadcast receiver - only restore wake word
     private val stateReceiver = object : BroadcastReceiver() {
@@ -105,10 +207,9 @@ class VoskWakeWordService : Service() {
                     isTtsSpeaking = true
                     sessionPaused = true
 
-                    stopAndroidSpeechRecognizer()
-
+                    // Stop Whisper recording instead of Android speech recognizer
+                    stopWhisperRecording()
                     stopListening()
-
                     wakeWordJob?.cancel()
 
                     Log.d("HeyLisa", "🛑 All audio recognition stopped for TTS")
@@ -117,8 +218,6 @@ class VoskWakeWordService : Service() {
                 CustomTtsService.TTS_FINISHED, CustomTtsService.TTS_ERROR -> {
                     Log.d("HeyLisa", "🔇 Custom TTS finished")
                     isTtsSpeaking = false
-
-                    // Don't start anything immediately - wait for PROCESSING_COMPLETE
                     Log.d("HeyLisa", "⏳ Waiting for PROCESSING_COMPLETE before resuming")
                 }
 
@@ -127,17 +226,21 @@ class VoskWakeWordService : Service() {
                     val expectFollowUp = intent?.getBooleanExtra("expect_follow_up", true) ?: true
                     Log.d("HeyLisa", "📥 PROCESSING_COMPLETE (expectFollowUp=$expectFollowUp)")
 
-                    stopAndroidSpeechRecognizer()
+                    stopWhisperRecording()
 
                     if (!isShuttingDown && !isTtsSpeaking) {
                         if (expectFollowUp) {
                             Log.d("HeyLisa", "🔄 Starting follow-up listening")
                             serviceScope.launch {
                                 delay(800)
-                                startFollowUpListening()
+                                startFollowUpWhisperListening()
                             }
                         } else {
                             Log.d("HeyLisa", "🏁 No follow-up requested – back to wake word")
+
+                            isSessionActive = false
+                            inFollowUp = false
+
                             serviceScope.launch {
                                 delay(800)
                                 startWakeWordDetection()
@@ -179,12 +282,10 @@ class VoskWakeWordService : Service() {
                     }
 
                     Log.d("HeyLisa", "VoiceInputActivity destroyed — restoring wake word detection")
-
-                    // Force cleanup all states
                     isSessionActive = false
 
                     stopListening()
-                    stopAndroidSpeechRecognizer()
+                    stopWhisperRecording()
 
                     serviceScope.launch {
                         delay(2000)
@@ -287,22 +388,443 @@ class VoskWakeWordService : Service() {
         }
     }
 
+    //whisper
+    private fun createWavFile(audioData: ByteArray, outputFile: File): Boolean {
+        return try {
+            FileOutputStream(outputFile).use { fos ->
+                // WAV header
+                val totalDataLen = audioData.size + 36
+                val channels = 1
+                val byteRate = SAMPLE_RATE * channels * BYTES_PER_SAMPLE
+
+                fos.write("RIFF".toByteArray())
+                fos.write(intToByteArray(totalDataLen))
+                fos.write("WAVE".toByteArray())
+                fos.write("fmt ".toByteArray())
+                fos.write(intToByteArray(16))
+                fos.write(shortToByteArray(1))
+                fos.write(shortToByteArray(channels.toShort()))
+                fos.write(intToByteArray(SAMPLE_RATE))
+                fos.write(intToByteArray(byteRate))
+                fos.write(shortToByteArray((channels * BYTES_PER_SAMPLE).toShort()))
+                fos.write(shortToByteArray((BYTES_PER_SAMPLE * 8).toShort()))
+                fos.write("data".toByteArray())
+                fos.write(intToByteArray(audioData.size))
+                fos.write(audioData)
+            }
+            true
+        } catch (e: IOException) {
+            Log.e("HeyLisa", "Error creating WAV file", e)
+            false
+        }
+    }
+
+
+    private fun detectVoiceActivity(buffer: ByteArray): Boolean {
+        var sum = 0L
+        var maxSample = 0
+        var samples = 0
+
+        for (i in buffer.indices step 2) {
+            if (i + 1 < buffer.size) {
+                // ✅ Fix: Properly handle signed 16-bit samples
+                val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort().toInt()
+                val absoluteSample = kotlin.math.abs(sample)
+                sum += (absoluteSample * absoluteSample).toLong()
+                maxSample = kotlin.math.max(maxSample, absoluteSample)
+                samples++
+            }
+        }
+
+        if (samples == 0) return false
+
+        val rms = kotlin.math.sqrt(sum.toDouble() / samples)
+
+        // ✅ Fix: Use proper thresholds for 16-bit audio
+        val hasVoice = rms > VOICE_ACTIVITY_THRESHOLD || maxSample > (VOICE_ACTIVITY_THRESHOLD * 1.5)
+
+        // ✅ Enhanced logging shows proper values now
+        if (hasVoice) {
+            Log.d("HeyLisa", "🎤 Voice detected - RMS: ${rms.toInt()}, Max: $maxSample, Threshold: $VOICE_ACTIVITY_THRESHOLD")
+        }
+
+        return hasVoice
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private suspend fun startWhisperRecording() {
+        speechRecognitionMutex.withLock {
+            // ✅ Cancel any existing job and wait for completion
+            if (speechRecognitionJob?.isActive == true) {
+                Log.d("HeyLisa", "🛑 Cancelling existing speech recognition job")
+                speechRecognitionJob?.cancel()
+                speechRecognitionJob?.join() // Wait for cancellation
+            }
+
+            // ✅ Reset states before starting
+            if (isWhisperRecording) {
+                Log.w("HeyLisa", "⚠️ Previous recording was still active, stopping it")
+                stopWhisperRecordingInternal()
+            }
+
+            Log.d("HeyLisa", "🎤 Starting Whisper audio recording...")
+
+            val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+
+            whisperAudioRecord = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE,
+                CHANNEL_CONFIG,
+                AUDIO_FORMAT,
+                bufferSize * 2
+            )
+
+            if (whisperAudioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                Log.e("HeyLisa", "Failed to initialize AudioRecord for Whisper")
+                return
+            }
+
+            audioBuffer.reset()
+            audioChunks.clear()
+            recordingStartTime = System.currentTimeMillis()
+            lastVoiceActivity = System.currentTimeMillis()
+            isWhisperRecording = true
+            isSessionActive = true
+
+            sendBroadcast(Intent("com.example.heylisa.WHISPER_RECORDING_STARTED"))
+            whisperAudioRecord?.startRecording()
+
+            speechRecognitionJob = serviceScope.launch {
+                recordAudioForWhisper()
+            }
+
+            Log.d("HeyLisa", "✅ Whisper recording started successfully")
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private suspend fun startWhisperRecordingWithoutMutex() {
+        Log.d("HeyLisa", "🎤 [MUTEX-FREE] Starting Whisper audio recording...")
+
+        // Cancel any existing job first
+        if (speechRecognitionJob?.isActive == true) {
+            Log.d("HeyLisa", "🛑 Cancelling existing speech recognition job")
+            speechRecognitionJob?.cancel()
+            speechRecognitionJob?.join()
+        }
+
+        // Reset states before starting
+        if (isWhisperRecording) {
+            Log.w("HeyLisa", "⚠️ Previous recording was still active, stopping it")
+            stopWhisperRecordingInternal()
+        }
+
+        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+
+        whisperAudioRecord = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            SAMPLE_RATE,
+            CHANNEL_CONFIG,
+            AUDIO_FORMAT,
+            bufferSize * 2
+        )
+
+        if (whisperAudioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e("HeyLisa", "Failed to initialize AudioRecord for Whisper")
+            return
+        }
+
+        // Set states AFTER successful initialization
+        audioBuffer.reset()
+        audioChunks.clear()
+        recordingStartTime = System.currentTimeMillis()
+        lastVoiceActivity = System.currentTimeMillis()
+        isWhisperRecording = true
+        isSessionActive = true
+
+        sendBroadcast(Intent("com.example.heylisa.WHISPER_RECORDING_STARTED"))
+        whisperAudioRecord?.startRecording()
+
+        speechRecognitionJob = serviceScope.launch {
+            recordAudioForWhisper()
+        }
+
+        Log.d("HeyLisa", "✅ [MUTEX-FREE] Whisper recording started successfully")
+    }
+
+    private fun stopWhisperRecordingInternal() {
+        Log.d("HeyLisa", "🛑 [STOP-1] Internal stop - cleaning up Whisper recording")
+
+        isWhisperRecording = false
+        Log.d("HeyLisa", "🛑 [STOP-2] Set isWhisperRecording = false")
+
+        whisperAudioRecord?.apply {
+            try {
+                Log.d("HeyLisa", "🛑 [STOP-3] Stopping AudioRecord...")
+                if (recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    stop()
+                    Log.d("HeyLisa", "🛑 [STOP-4] AudioRecord stopped")
+                }
+                release()
+                Log.d("HeyLisa", "🛑 [STOP-5] AudioRecord released")
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "🛑 [STOP-6] Error stopping AudioRecord: ${e.message}")
+            }
+        }
+        whisperAudioRecord = null
+        Log.d("HeyLisa", "🛑 [STOP-7] AudioRecord set to null")
+    }
+
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private suspend fun recordAudioForWhisper() {
+        val buffer = ByteArray(1024)
+        var hasVoiceDetected = false
+        var silenceCheckJob: Job? = null
+        var lastVoiceDetectedTime = System.currentTimeMillis()
+
+
+        var voiceActivityCounter = 0
+        val voiceConfirmationThreshold = 3
+
+        while (isWhisperRecording && !isShuttingDown) {
+            try {
+                val bytesRead = whisperAudioRecord?.read(buffer, 0, buffer.size) ?: 0
+
+                if (bytesRead > 0) {
+                    audioBuffer.write(buffer, 0, bytesRead)
+
+                    logVoiceActivityForTuning(buffer)
+
+                    val hasVoice = detectVoiceActivity(buffer)
+
+                    if (hasVoice) {
+                        voiceActivityCounter++
+                        if (voiceActivityCounter >= voiceConfirmationThreshold) {
+                            if (!hasVoiceDetected) {
+                                Log.d("HeyLisa", "🎤 Voice activity CONFIRMED after $voiceActivityCounter detections")
+                            }
+                            hasVoiceDetected = true
+                            lastVoiceDetectedTime = System.currentTimeMillis()
+                            lastVoiceActivity = System.currentTimeMillis()
+
+                            silenceCheckJob?.cancel()
+                            silenceCheckJob = serviceScope.launch {
+                                delay(SILENCE_THRESHOLD_MS)
+
+                                val now = System.currentTimeMillis()
+                                val actualSilenceDuration = now - lastVoiceDetectedTime
+
+                                if (actualSilenceDuration >= SILENCE_THRESHOLD_MS && isWhisperRecording) {
+                                    Log.d("HeyLisa", "🔇 Confirmed silence after voice activity (${actualSilenceDuration}ms)")
+                                    stopWhisperRecordingAndProcess()
+                                }
+                            }
+                        }
+                    } else {
+                        voiceActivityCounter = 0
+                    }
+
+                    val now = System.currentTimeMillis()
+                    val recordingDuration = now - recordingStartTime
+
+                    when {
+                        recordingDuration >= MAX_RECORDING_DURATION_MS -> {
+                            Log.d("HeyLisa", "⏱️ Max recording duration reached")
+                            silenceCheckJob?.cancel()
+                            stopWhisperRecordingAndProcess()
+                            break
+                        }
+                        !hasVoiceDetected && recordingDuration >= NO_VOICE_TIMEOUT_MS -> {
+                            Log.d("HeyLisa", "⏰ No voice detected within ${NO_VOICE_TIMEOUT_MS/1000} seconds")
+                            silenceCheckJob?.cancel()
+                            stopWhisperRecordingAndProcess()
+                            break
+                        }
+                    }
+                }
+
+                delay(50)
+
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "Error during Whisper recording", e)
+                silenceCheckJob?.cancel()
+                break
+            }
+        }
+
+        silenceCheckJob?.cancel()
+    }
+
+    private fun intToByteArray(value: Int): ByteArray {
+        return ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()
+    }
+
+    private fun shortToByteArray(value: Short): ByteArray {
+        return ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN).putShort(value).array()
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private suspend fun stopWhisperRecordingAndProcess() {
+        Log.d("HeyLisa", "🛑 Stopping Whisper recording and processing...")
+
+        isWhisperRecording = false
+
+        whisperAudioRecord?.apply {
+            if (recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                stop()
+            }
+            release()
+        }
+        whisperAudioRecord = null
+
+        // Check if we have enough audio to process
+        val audioData = audioBuffer.toByteArray()
+        val recordingDuration = System.currentTimeMillis() - recordingStartTime
+
+        Log.d("HeyLisa", "📊 Audio data size: ${audioData.size}, duration: ${recordingDuration}ms")
+
+        if (audioData.isEmpty() || recordingDuration < MIN_RECORDING_DURATION_MS) {
+            Log.w("HeyLisa", "⚠️ Recording too short or empty, not processing")
+            endWhisperSession()
+            return
+        }
+
+        // Send processing started broadcast
+        sendBroadcast(Intent("com.example.heylisa.PROCESSING_STARTED"))
+
+        // ✅ Launch processing in a separate coroutine to prevent blocking
+        serviceScope.launch {
+            try {
+                Log.d("HeyLisa", "🚀 Starting Whisper processing in new coroutine")
+                processAudioWithWhisper(audioData)
+            } catch (e: Exception) {
+                Log.e("HeyLisa", "❌ Error in Whisper processing coroutine", e)
+                endWhisperSession()
+            }
+        }
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    private suspend fun processAudioWithWhisper(audioData: ByteArray) = withContext(Dispatchers.IO) {
+        try {
+            if (!isNetworkAvailable()) {
+                Log.e("HeyLisa", "❌ No internet connection available for Whisper API")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@VoskWakeWordService, "No internet connection", Toast.LENGTH_SHORT).show()
+                }
+                endWhisperSession()
+                return@withContext
+            }
+
+            Log.d("HeyLisa", "🤖 Processing ${audioData.size} bytes with Whisper API...")
+
+            val tempFile = File(cacheDir, "whisper_audio_${System.currentTimeMillis()}.wav")
+
+            if (!createWavFile(audioData, tempFile)) {
+                Log.e("HeyLisa", "Failed to create WAV file")
+                endWhisperSession()
+                return@withContext
+            }
+
+            val transcription = sendToWhisperAPI(tempFile)
+            tempFile.delete()
+
+            if (!transcription.isNullOrBlank()) {
+                val words = transcription.lowercase().trim().split(" ")
+                val meaningfulWords = words.filterNot { it in Noisy.noisyWords }
+
+                if (meaningfulWords.isNotEmpty()) {
+                    val result = meaningfulWords.joinToString(" ")
+                    Log.d("HeyLisa", "🎯 Whisper result: '$result'")
+
+                    // ✅ Send result BEFORE ending session
+                    sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
+                        putExtra("result", result)
+                        putExtra("source", "whisper")
+                    })
+
+                    // ✅ Don't launch a separate coroutine - just delay directly
+                    delay(300)
+                    sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
+
+                    // ✅ Don't call endWhisperSession() here - let PROCESSING_COMPLETE handle it
+                    Log.d("HeyLisa", "✅ Transcription processing completed successfully")
+                } else {
+                    Log.d("HeyLisa", "❌ No meaningful words in Whisper result")
+                    endWhisperSession()
+                }
+            } else {
+                Log.w("HeyLisa", "⚠️ Empty transcription from Whisper")
+                endWhisperSession()
+            }
+
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // ✅ Handle cancellation gracefully
+            Log.w("HeyLisa", "⚠️ Whisper processing was cancelled (this is normal during cleanup)")
+            throw e // Re-throw to maintain coroutine cancellation behavior
+        } catch (e: Exception) {
+            Log.e("HeyLisa", "Error processing audio with Whisper", e)
+            endWhisperSession()
+        }
+    }
+
+
+    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+    private fun endWhisperSession() {
+        Log.d("HeyLisa", "🏁 Ending Whisper session")
+
+        // ✅ Reset all session flags
+        isSessionActive = false
+        isWhisperRecording = false
+        inFollowUp = false
+
+        // ✅ Clean up audio resources
+        stopWhisperRecordingInternal()
+
+        // ✅ Cancel and clean up the job
+        speechRecognitionJob?.cancel()
+        speechRecognitionJob = null
+
+        audioBuffer.reset()
+        audioChunks.clear()
+
+        serviceScope.launch {
+            sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
+
+            if (!isShuttingDown && !isTtsSpeaking && !isProcessingResult) {
+                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
+                    putExtra("state", "wake_word_listening")
+                })
+
+                delay(1000)
+                startWakeWordDetection()
+            } else {
+                Log.d("HeyLisa", "🛑 Not restarting wake word - TTS: $isTtsSpeaking, Processing: $isProcessingResult")
+            }
+        }
+    }
+
+    private fun isNetworkAvailable(): Boolean {
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = connectivityManager.activeNetwork ?: return false
+        val networkCapabilities =
+            connectivityManager.getNetworkCapabilities(network) ?: return false
+
+        return networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
     @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
     private fun forceRestart() {
         Log.w("HeyLisa", "🔄 Force restarting wake word detection...")
 
-        // Reset all state flags
         isSessionActive = false
         isListening = false
 
-        // Clean up existing resources
         serviceScope.launch {
-            speechRecognitionMutex.withLock {
-                withContext(Dispatchers.Main) {
-                    currentSpeechRecognizer?.destroy()
-                    currentSpeechRecognizer = null
-                }
-            }
+            stopWhisperRecording()
 
             stopListening()
 
@@ -312,6 +834,28 @@ class VoskWakeWordService : Service() {
             startWakeWordDetection()
         }
     }
+
+    private fun logVoiceActivityForTuning(buffer: ByteArray) {
+        var sum = 0L
+        var maxSample = 0
+
+        for (i in buffer.indices step 2) {
+            if (i + 1 < buffer.size) {
+                val sample = (buffer[i].toInt() and 0xFF) or ((buffer[i + 1].toInt() and 0xFF) shl 8)
+                val absoluteSample = kotlin.math.abs(sample)
+                sum += (absoluteSample * absoluteSample).toLong()
+                maxSample = kotlin.math.max(maxSample, absoluteSample)
+            }
+        }
+
+        val rms = kotlin.math.sqrt(sum.toDouble() / (buffer.size / 2))
+
+        // ✅ Log every 10th reading to avoid spam
+        if (System.currentTimeMillis() % 500 < 50) { // Log every ~500ms
+            Log.d("HeyLisa", "🔊 Audio levels - RMS: ${rms.toInt()}, Max: $maxSample, Threshold: $VOICE_ACTIVITY_THRESHOLD")
+        }
+    }
+
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private suspend fun startWakeWordDetection() {
@@ -470,11 +1014,11 @@ class VoskWakeWordService : Service() {
                                                 delay(200)
 
                                                 sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
-                                                    putExtra("state", "speech_recognition_started")
+                                                    putExtra("state", "whisper_recording_started") // ✅ Updated
                                                 })
 
                                                 delay(300)
-                                                startAndroidSpeechRecognition()
+                                                startWhisperRecording()
                                             }
                                             break
                                         } else {
@@ -518,297 +1062,6 @@ class VoskWakeWordService : Service() {
         }
     }
 
-    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    private suspend fun startAndroidSpeechRecognition() {
-        speechRecognitionMutex.withLock {
-            if (isSessionActive || currentSpeechRecognizer != null) {
-                Log.w("HeyLisa", "🛑 Speech recognition already active, skipping")
-                return
-            }
-
-            Log.d("HeyLisa", "🎤 Starting Android Speech Recognition...")
-
-            isSessionActive = true
-            speechRecognitionStartTime = System.currentTimeMillis()
-            lastResultTime = System.currentTimeMillis()
-
-            speechRecognitionJob?.cancel()
-            speechRecognitionJob = serviceScope.launch {
-                try {
-                    withContext(Dispatchers.Main) {
-                        initializeAndroidSpeechRecognizer()
-                        if (currentSpeechRecognizer != null) {
-                            startSpeechRecognition()
-                        } else {
-                            throw Exception("Speech recognizer initialization failed")
-                        }
-                    }
-
-                    while (isSessionActive && !isShuttingDown && currentSpeechRecognizer != null) {
-                        val now = System.currentTimeMillis()
-                        val sinceLast = now - lastResultTime
-                        val total     = now - speechRecognitionStartTime
-
-                        // our own silence detector – 3 consecutive seconds
-                        if (speechStarted && sinceLast >= SILENCE_END_MS) {
-                            endSpeechSession()
-                            break
-                        }
-
-                        if (total >= MAX_SESSION_MS) {
-                            endSpeechSession()
-                            break
-                        }
-                        delay(1_000L)
-                    }
-                } catch (e: Exception) {
-                    Log.e("HeyLisa", "Speech recognition failed to start", e)
-                    endSpeechSession()
-                    delay(1000)
-                    if (!isShuttingDown) {
-                        startWakeWordDetection()
-                    }
-                }
-            }
-        }
-    }
-
-    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
-    private fun initializeAndroidSpeechRecognizer() {
-        // Clean up existing recognizer
-        currentSpeechRecognizer?.destroy()
-        currentSpeechRecognizer = null
-
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            Log.e("HeyLisa", "Speech recognition not available on this device")
-            endSpeechSession()
-            return
-        }
-
-        currentSpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        currentSpeechRecognizer?.setRecognitionListener(object : RecognitionListener {
-
-            @RequiresPermission(
-                android.Manifest.permission.RECORD_AUDIO
-            )
-            override fun onReadyForSpeech(params: Bundle?) {
-                speechStarted = false
-                startSpeechTimeoutTask?.cancel()
-                startSpeechTimeoutTask = serviceScope.launch {
-                    delay(START_SPEAK_MS)
-                    if (!speechStarted) endSpeechSession()       // user never spoke
-                }
-            }
-
-            override fun onBeginningOfSpeech() {
-                speechStarted = true
-                startSpeechTimeoutTask?.cancel()
-                lastResultTime = System.currentTimeMillis()
-            }
-
-            /* Ignore onEndOfSpeech – we will decide based on our own timer */
-            override fun onEndOfSpeech() { /* no-op */ }
-
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-
-            @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
-            override fun onError(error: Int) {
-                val errorMessage = when (error) {
-                    SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
-                    SpeechRecognizer.ERROR_CLIENT -> "Client side error"
-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Insufficient permissions"
-                    SpeechRecognizer.ERROR_NETWORK -> "Network error"
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
-                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech input matched"
-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "RecognitionService busy"
-                    SpeechRecognizer.ERROR_SERVER -> "Server error"
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech input"
-                    else -> "Unknown error"
-                }
-
-                Log.e("HeyLisa", "Speech recognition error: $errorMessage")
-
-                when (error) {
-                    SpeechRecognizer.ERROR_CLIENT -> {
-                        Log.w("HeyLisa", "🛑 Client error - cleaning up")
-                        endSpeechSession()
-                    }
-                    SpeechRecognizer.ERROR_NO_MATCH,
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
-                        // ✅ CRITICAL FIX: Don't restart if we're in follow-up mode
-                        if (inFollowUp) {
-                            Log.d("HeyLisa", "🛑 No-match/timeout during follow-up - letting follow-up handler manage it")
-                            return
-                        }
-
-                        // ✅ Only restart for main sessions, not follow-up
-                        if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
-                            Handler(Looper.getMainLooper()).postDelayed({
-                                if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult && !inFollowUp) {
-                                    Log.d("HeyLisa", "🔄 Restarting speech recognition after no match/timeout (main session)")
-                                    startSpeechRecognition()
-                                } else {
-                                    Log.d("HeyLisa", "🛑 Conditions changed - not restarting speech recognition")
-                                    endSpeechSession()
-                                }
-                            }, 1000)
-                        } else {
-                            Log.d("HeyLisa", "🛑 Not restarting speech - TTS active or session ended")
-                            endSpeechSession()
-                        }
-                    }
-                    else -> {
-                        endSpeechSession()
-                    }
-                }
-            }
-
-            @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                val confidence = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
-
-                var hasResult = false // ✅ Add this flag to track if we got a meaningful result
-
-                if (!matches.isNullOrEmpty()) {
-                    val recognizedText = matches[0].lowercase().trim()
-                    val confidenceScore = confidence?.getOrNull(0) ?: 0.0f
-
-                    Log.d("HeyLisa", "🎯 Recognized: '$recognizedText' (confidence: $confidenceScore)")
-
-                    // Filter out noisy words
-                    val words = recognizedText.split(" ")
-                    val meaningfulWords = words.filterNot { it in Noisy.noisyWords }
-
-                    if (meaningfulWords.isNotEmpty()) {
-                        hasResult = true // ✅ Set flag when we have meaningful words
-                        val result = meaningfulWords.joinToString(" ")
-
-//                        serviceScope.launch {
-//                            withContext(Dispatchers.Main) {
-//                                Toast.makeText(
-//                                    this@VoskWakeWordService,
-//                                    "You said: $result",
-//                                    Toast.LENGTH_LONG
-//                                ).show()
-//                            }
-//                        }
-
-                        // Send result directly
-                        sendBroadcast(Intent("com.example.heylisa.RECOGNIZED_TEXT").apply {
-                            putExtra("result", result)
-                        })
-
-                        lastResultTime = System.currentTimeMillis()
-
-                        serviceScope.launch {
-                            delay(300)
-                            sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
-                        }
-                    }
-                }
-
-                if (hasResult) {
-                    Log.d("HeyLisa", "🛑 Sent result to processing - not continuing speech recognition")
-                    return
-                }
-
-                if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        // Triple-check conditions before restarting
-                        if (isSessionActive && currentSpeechRecognizer != null && !isTtsSpeaking && !isProcessingResult) {
-                            Log.d("HeyLisa", "🔄 Continuing speech recognition")
-                            startSpeechRecognition()
-                        } else {
-                            Log.d("HeyLisa", "🛑 Conditions changed - ending session instead of continuing")
-                            endSpeechSession()
-                        }
-                    }, 500)
-                } else {
-                    Log.d("HeyLisa", "🛑 Not continuing speech - conditions not met (processing: $isProcessingResult)")
-                    endSpeechSession()
-                }
-            }
-
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    val partialText = matches[0]
-
-                    sendBroadcast(Intent("com.example.heylisa.PARTIAL_TEXT").apply {
-                        putExtra("text", partialText)
-                    })
-
-                    lastResultTime = System.currentTimeMillis()
-                }
-            }
-
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-    }
-
-    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
-    private fun startSpeechRecognition() {
-        if (!isSessionActive || currentSpeechRecognizer == null) return
-
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-
-            // 3-second ceiling; the engine *may* stop earlier, so we guard for that.
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                SILENCE_END_MS)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                SILENCE_END_MS)
-        }
-
-        try {
-            currentSpeechRecognizer?.startListening(intent)
-        } catch (e: Exception) {
-            Log.e("HeyLisa", "Failed to start speech recognition", e)
-            endSpeechSession()
-        }
-    }
-
-    private fun stopAndroidSpeechRecognizer() {
-        currentSpeechRecognizer?.stopListening()
-    }
-
-    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
-    private fun endSpeechSession() {
-        Log.d("HeyLisa", "🏁 Ending speech recognition session")
-
-        isSessionActive = false
-        inFollowUp = false // ✅ CLEAR FLAG when ending session
-
-        serviceScope.launch {
-            speechRecognitionMutex.withLock {
-                withContext(Dispatchers.Main) {
-                    currentSpeechRecognizer?.stopListening()
-                    currentSpeechRecognizer?.destroy()
-                    currentSpeechRecognizer = null
-                }
-            }
-
-            sendBroadcast(Intent("com.example.heylisa.CLEAR_TEXT"))
-
-            if (!isShuttingDown && !isTtsSpeaking && !isProcessingResult) {
-                sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
-                    putExtra("state", "wake_word_listening")
-                })
-
-                delay(1000)
-                startWakeWordDetection()
-            } else {
-                Log.d("HeyLisa", "🛑 Not restarting wake word - TTS speaking: $isTtsSpeaking, Processing: $isProcessingResult")
-            }
-        }
-    }
 
 
     // Wake word detection methods (unchanged)
@@ -919,88 +1172,121 @@ class VoskWakeWordService : Service() {
     }
 
     @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
-    private suspend fun startFollowUpListening() {
+    private suspend fun startFollowUpWhisperListening() {
+        Log.d("HeyLisa", "🎤 [DEBUG-1] Starting follow-up Whisper listening session")
+
         if (isShuttingDown || isTtsSpeaking) {
-            Log.w("HeyLisa", "🛑 Cannot start follow-up - shutting down or TTS active")
+            Log.w("HeyLisa", "🛑 Cannot start follow-up - shutting down: $isShuttingDown, TTS: $isTtsSpeaking")
             return
         }
 
-        inFollowUp = true // ✅ SET FLAG
-        Log.d("HeyLisa", "🎤 Starting follow-up listening session after TTS completion")
+        inFollowUp = true
+        Log.d("HeyLisa", "🎤 [DEBUG-2] Set inFollowUp = true, attempting mutex lock")
 
-        speechRecognitionMutex.withLock {
-            // ✅ CRITICAL: Clean up any existing recognizer first
-            withContext(Dispatchers.Main) {
-                currentSpeechRecognizer?.stopListening()
-                currentSpeechRecognizer?.destroy()
-                currentSpeechRecognizer = null
-            }
+        try {
+            Log.d("HeyLisa", "🔒 [DEBUG-3] Acquiring speechRecognitionMutex...")
 
-            if (isShuttingDown) {
-                inFollowUp = false // ✅ CLEAR FLAG
-                return
-            }
+            speechRecognitionMutex.withLock {
+                Log.d("HeyLisa", "🔓 [DEBUG-4] Mutex acquired successfully")
 
-            Log.d("HeyLisa", "🎤 Initializing follow-up speech recognition...")
+                // ✅ Check current job state before cleanup
+                val currentJobState = speechRecognitionJob?.let {
+                    "isActive=${it.isActive}, isCancelled=${it.isCancelled}, isCompleted=${it.isCompleted}"
+                } ?: "null"
+                Log.d("HeyLisa", "🔄 [DEBUG-5] Current job state: $currentJobState")
 
-            // ✅ Reset session state for follow-up
-            isSessionActive = true
-            speechRecognitionStartTime = System.currentTimeMillis()
-            lastResultTime = System.currentTimeMillis()
+                if (isWhisperRecording || speechRecognitionJob?.isActive == true) {
+                    Log.d("HeyLisa", "🔄 [DEBUG-6] Cleaning up - isWhisperRecording: $isWhisperRecording, jobActive: ${speechRecognitionJob?.isActive}")
 
-            // Set a timeout for follow-up listening
-            val followUpTimeoutJob = serviceScope.launch {
-                delay(MAX_SESSION_MS + 2_000L)              // 62 s safety cap
-                if (isSessionActive && !isShuttingDown) {
-                    sendBroadcast(Intent("com.example.heylisa.FOLLOWUP_TIMEOUT"))
-                    endSpeechSession()
+                    stopWhisperRecordingInternal()
+                    Log.d("HeyLisa", "🔄 [DEBUG-7] stopWhisperRecordingInternal() completed")
+
+                    speechRecognitionJob?.cancel()
+                    Log.d("HeyLisa", "🔄 [DEBUG-8] speechRecognitionJob cancelled")
+
+                    // ✅ Add timeout to join() to prevent infinite wait
+                    try {
+                        withTimeout(3000L) { // 3 second timeout
+                            speechRecognitionJob?.join()
+                            Log.d("HeyLisa", "🔄 [DEBUG-9] speechRecognitionJob joined successfully")
+                        }
+                    } catch (e: TimeoutCancellationException) {
+                        Log.w("HeyLisa", "⚠️ [DEBUG-9a] Job join timed out, continuing anyway")
+                        speechRecognitionJob = null // Force reset
+                    }
+                } else {
+                    Log.d("HeyLisa", "🔄 [DEBUG-10] No cleanup needed")
                 }
-            }
 
-            try {
-                withContext(Dispatchers.Main) {
-                    initializeAndroidSpeechRecognizer()
-                    if (currentSpeechRecognizer != null) {
-                        startSpeechRecognition()
-                        Log.d("HeyLisa", "✅ Follow-up speech recognition started successfully")
-                    } else {
-                        throw Exception("Follow-up speech recognizer initialization failed")
+                if (isShuttingDown) {
+                    Log.w("HeyLisa", "🛑 [DEBUG-11] Service shutting down, aborting follow-up")
+                    inFollowUp = false
+                    return@withLock
+                }
+
+                Log.d("HeyLisa", "⏱️ [DEBUG-12] Setting up timeout job")
+                val followUpTimeoutJob = serviceScope.launch {
+                    delay(MAX_SESSION_MS + 2_000L)
+                    if (isSessionActive && !isShuttingDown) {
+                        Log.d("HeyLisa", "⏰ Follow-up timeout triggered")
+                        sendBroadcast(Intent("com.example.heylisa.FOLLOWUP_TIMEOUT"))
+                        endWhisperSession()
                     }
                 }
 
+                try {
+                    Log.d("HeyLisa", "🔄 [DEBUG-13] Resetting session state")
+                    isSessionActive = false
 
-                while (isSessionActive && !isShuttingDown && currentSpeechRecognizer != null) {
-                    val now = System.currentTimeMillis()
-                    val sinceLast = now - lastResultTime
-                    val total     = now - speechRecognitionStartTime
+                    Log.d("HeyLisa", "🚀 [DEBUG-14] About to call startWhisperRecording()")
+                    startWhisperRecordingWithoutMutex()
+                    Log.d("HeyLisa", "✅ [DEBUG-15] startWhisperRecording() completed")
 
-                    if (speechStarted && sinceLast >= SILENCE_END_MS) {
-                        endSpeechSession()
-                        break
+                    // Monitor the recording session
+                    Log.d("HeyLisa", "👁️ [DEBUG-16] Starting monitoring loop")
+                    while (isSessionActive && !isShuttingDown && isWhisperRecording) {
+                        Log.d("HeyLisa", "👁️ [DEBUG-17] Monitoring - Active: $isSessionActive, Recording: $isWhisperRecording")
+                        delay(1_000L)
                     }
 
-                    if (total >= MAX_SESSION_MS) {
-                        endSpeechSession()
-                        break
-                    }
-                    delay(1_000L)
+                    Log.d("HeyLisa", "🔚 [DEBUG-18] Follow-up Whisper session ended")
+                    followUpTimeoutJob.cancel()
+
+                } catch (e: Exception) {
+                    Log.e("HeyLisa", "❌ [DEBUG-19] Follow-up Whisper listening failed", e)
+                    followUpTimeoutJob.cancel()
+                    endWhisperSession()
+                } finally {
+                    Log.d("HeyLisa", "🏁 [DEBUG-20] Finally block - setting inFollowUp = false")
+                    inFollowUp = false
                 }
-
-                Log.d("HeyLisa", "🔚 Follow-up listening session ended")
-                followUpTimeoutJob.cancel()
-
-                // End the session and return to wake word detection
-                endSpeechSession()
-
-            } catch (e: Exception) {
-                Log.e("HeyLisa", "❌ Follow-up listening failed", e)
-                followUpTimeoutJob.cancel()
-                endSpeechSession()
-            } finally {
-                inFollowUp = false // ✅ CLEAR FLAG
             }
+
+            Log.d("HeyLisa", "🔓 [DEBUG-21] Mutex released, follow-up session completed")
+
+        } catch (e: Exception) {
+            Log.e("HeyLisa", "💥 [DEBUG-22] Exception in follow-up listening", e)
+            inFollowUp = false
         }
     }
+
+    private fun stopWhisperRecording() {
+        if (!isWhisperRecording) return
+
+        Log.d("HeyLisa", "🛑 Manually stopping Whisper recording")
+        isWhisperRecording = false
+
+        whisperAudioRecord?.apply {
+            if (recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                stop()
+            }
+            release()
+        }
+        whisperAudioRecord = null
+
+        speechRecognitionJob?.cancel()
+    }
+
 
 
     // Utility methods (unchanged)
@@ -1039,7 +1325,8 @@ class VoskWakeWordService : Service() {
     private fun handleManualSpeechStart() {
         serviceScope.launch {
             try {
-                // Check conditions to prevent conflicts
+                Log.d("HeyLisa", "🎤 Manual start requested")
+
                 if (isShuttingDown) {
                     Log.w("HeyLisa", "🛑 Cannot start speech - service shutting down")
                     return@launch
@@ -1050,32 +1337,33 @@ class VoskWakeWordService : Service() {
                     return@launch
                 }
 
-                if (isSessionActive && currentSpeechRecognizer != null) {
-                    Log.w("HeyLisa", "🛑 Speech recognition already active")
-                    return@launch
-                }
-
-                // Stop wake word detection to avoid conflicts
+                // ✅ Stop wake word detection first
                 if (isListening) {
                     Log.d("HeyLisa", "🛑 Stopping wake word detection for manual speech")
                     stopListening()
                 }
 
-                // Small delay to ensure cleanup
-                delay(500)
+                // ✅ Use mutex to ensure proper synchronization
+                speechRecognitionMutex.withLock {
+                    if (isWhisperRecording || speechRecognitionJob?.isActive == true) {
+                        Log.d("HeyLisa", "🔄 Stopping existing recording for manual start")
+                        stopWhisperRecordingInternal()
+                        speechRecognitionJob?.cancel()
+                        speechRecognitionJob?.join() // Wait for cleanup
+                    }
+                }
 
-                // Start Android speech recognition
-                Log.d("HeyLisa", "🚀 Starting manual speech recognition")
-                startAndroidSpeechRecognition()
+                delay(500) // Small delay to ensure cleanup
 
-                // Broadcast that speech recognition started
+                Log.d("HeyLisa", "🚀 Starting manual Whisper recording")
+                startWhisperRecording()
+
                 sendBroadcast(Intent("com.example.heylisa.STATE_UPDATE").apply {
-                    putExtra("state", "speech_recognition_started")
+                    putExtra("state", "whisper_recording_started")
                 })
 
             } catch (e: Exception) {
-                Log.e("HeyLisa", "Failed to start manual speech recognition", e)
-                // Send error broadcast to UI
+                Log.e("HeyLisa", "Failed to start manual Whisper recording", e)
                 sendBroadcast(Intent("com.example.heylisa.SPEECH_START_ERROR").apply {
                     putExtra("error", e.message)
                 })
@@ -1087,14 +1375,17 @@ class VoskWakeWordService : Service() {
     private fun handleManualSpeechStop() {
         serviceScope.launch {
             try {
-                Log.d("HeyLisa", "🛑 Manually stopping speech recognition")
-                endSpeechSession()
+                Log.d("HeyLisa", "🛑 Manually stopping Whisper recording")
+                if (isWhisperRecording) {
+                    stopWhisperRecordingAndProcess()
+                } else {
+                    endWhisperSession()
+                }
             } catch (e: Exception) {
-                Log.e("HeyLisa", "Error stopping manual speech recognition", e)
+                Log.e("HeyLisa", "Error stopping manual Whisper recording", e)
             }
         }
     }
-
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun restartAudioRecordAndRecognizer() {
@@ -1300,21 +1591,13 @@ class VoskWakeWordService : Service() {
         unregisterReceiver(stateReceiver)
 
         stopListening()
-
-        // Clean up Android Speech Recognizer with proper synchronization
-        runBlocking {
-            speechRecognitionMutex.withLock {
-                currentSpeechRecognizer?.destroy()
-                currentSpeechRecognizer = null
-            }
-        }
+        stopWhisperRecording()
 
         synchronized(recognizerLock) {
             wakeWordRecognizer?.close()
             wakeWordRecognizer = null
         }
 
-        // Close small model
         if (::smallModel.isInitialized) {
             smallModel.close()
         }
