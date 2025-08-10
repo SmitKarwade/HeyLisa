@@ -1,6 +1,7 @@
 package com.example.heylisa.voice
 
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -8,6 +9,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import com.example.heylisa.R
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -329,7 +331,8 @@ class VoiceInputActivity : ComponentActivity() {
                 Surface(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(16.dp),
+                        .padding(16.dp)
+                        .imePadding(),
                     shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 8.dp
@@ -473,7 +476,7 @@ class VoiceInputActivity : ComponentActivity() {
                                 modifier = Modifier
                                     .size(8.dp)
                                     .background(
-                                        Color.Blue,
+                                        Color.Blue.copy(0.7f),
                                         CircleShape
                                     )
                             )
@@ -483,7 +486,7 @@ class VoiceInputActivity : ComponentActivity() {
                                 modifier = Modifier
                                     .size(8.dp)
                                     .background(
-                                        Color.Green,
+                                        Color.Green.copy(0.7f),
                                         CircleShape
                                     )
                             )
@@ -492,7 +495,7 @@ class VoiceInputActivity : ComponentActivity() {
                     Text(
                         text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
                 }
             }
@@ -535,6 +538,18 @@ class VoiceInputActivity : ComponentActivity() {
 
     @Composable
     fun ChatMessageBubble(message: ChatMessage) {
+        val dynamicMaxWidth = remember(message.content) {
+            val contentLength = message.content.length
+            when {
+                message.messageType == MessageType.EMAIL_DRAFT -> 320.dp
+                contentLength <= 3 -> 80.dp    // "Hi", "Yes", "No"
+                contentLength <= 10 -> 120.dp  // "Thank you", "Okay"
+                contentLength <= 25 -> 180.dp  // Short sentences
+                contentLength <= 50 -> 240.dp  // Medium sentences
+                else -> 280.dp                 // Long messages
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = if (message.isFromUser) {
@@ -547,58 +562,61 @@ class VoiceInputActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.width(48.dp))
             }
 
-            Surface(
-                modifier = Modifier.widthIn(max = if (message.messageType == MessageType.EMAIL_DRAFT) 320.dp else 280.dp),
-                shape = RoundedCornerShape(
-                    topStart = 16.dp,
-                    topEnd = 16.dp,
-                    bottomStart = if (message.isFromUser) 16.dp else 4.dp,
-                    bottomEnd = if (message.isFromUser) 4.dp else 16.dp
-                ),
-                color = when {
-                    message.isFromUser -> Color(0xFF6A78C2)
-                    message.messageType == MessageType.EMAIL_DRAFT -> Color(0xFFE8F4FD)
-                    else -> MaterialTheme.colorScheme.surfaceVariant
-                }
+            Box(
+                modifier = Modifier.widthIn(max = dynamicMaxWidth),
+                contentAlignment = if (message.isFromUser) Alignment.CenterEnd else Alignment.CenterStart
             ) {
-                Column(
-                    modifier = Modifier.padding(12.dp)
+                Surface(
+                    shape = RoundedCornerShape(
+                        topStart = 16.dp,
+                        topEnd = 16.dp,
+                        bottomStart = if (message.isFromUser) 16.dp else 4.dp,
+                        bottomEnd = if (message.isFromUser) 4.dp else 16.dp
+                    ),
+                    color = when {
+                        message.isFromUser -> Color(0xFF6A78C2)
+                        message.messageType == MessageType.EMAIL_DRAFT -> Color(0xFFE8F4FD)
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                    }
                 ) {
-                    Text(
-                        text = message.content,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = when {
-                            message.isFromUser -> Color.White
-                            message.messageType == MessageType.EMAIL_DRAFT -> Color(0xFF1976D2)
-                            else -> MaterialTheme.colorScheme.onSurface
-                        }
-                    )
-
-                    // ✅ Bottom row with time and delivery status
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier.padding(12.dp)
                     ) {
                         Text(
-                            text = message.getFormattedTime(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (message.isFromUser) {
-                                Color.White.copy(alpha = 0.7f)
-                            } else {
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                            }
+                            text = message.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = when {
+                                message.isFromUser -> Color.White
+                                message.messageType == MessageType.EMAIL_DRAFT -> Color(0xFF1976D2)
+                                else -> MaterialTheme.colorScheme.onSurface
+                            },
+                            modifier = Modifier.wrapContentWidth(Alignment.Start)
                         )
 
-                        // ✅ Add delivery ticks for user messages only
-                        if (message.isFromUser) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            DeliveryTicks(
-                                status = message.deliveryStatus,
-                                modifier = Modifier
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = message.getFormattedTime(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (message.isFromUser) {
+                                    Color.White.copy(alpha = 0.7f)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                }
                             )
+
+                            if (message.isFromUser) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                DeliveryTicks(
+                                    status = message.deliveryStatus,
+                                    modifier = Modifier
+                                )
+                            }
                         }
                     }
                 }
@@ -609,8 +627,6 @@ class VoiceInputActivity : ComponentActivity() {
             }
         }
     }
-
-    // Add this to your VoiceInputActivity.kt
 
     @Composable
     fun DeliveryTicks(
@@ -628,7 +644,6 @@ class VoiceInputActivity : ComponentActivity() {
                 )
             }
             DeliveryStatus.DELIVERED -> {
-                // Double tick
                 Row(
                     horizontalArrangement = Arrangement.spacedBy((-4).dp)
                 ) {
@@ -636,7 +651,7 @@ class VoiceInputActivity : ComponentActivity() {
                         painter = painterResource(id = android.R.drawable.ic_menu_agenda),
                         contentDescription = "Delivered",
                         modifier = modifier.size(12.dp),
-                        tint = Color.Blue.copy(alpha = 0.8f) // Blue ticks for delivered
+                        tint = Color.Blue.copy(alpha = 0.8f)
                     )
                     Icon(
                         painter = painterResource(id = android.R.drawable.ic_menu_agenda),
@@ -647,7 +662,6 @@ class VoiceInputActivity : ComponentActivity() {
                 }
             }
             DeliveryStatus.FAILED -> {
-                // Red exclamation for failed
                 Icon(
                     painter = painterResource(id = android.R.drawable.ic_dialog_alert),
                     contentDescription = "Failed",
@@ -713,7 +727,7 @@ class VoiceInputActivity : ComponentActivity() {
                     shape = CircleShape,
                     color = when {
                         isListening -> Color.Red.copy(alpha = 0.1f)
-                        isProcessing -> Color(0xFFFF9800).copy(alpha = 0.1f) // ✅ Orange for processing
+                        isProcessing -> Color(0xFFFF9800).copy(alpha = 0.1f)
                         else -> Color(0xFF6A78C2).copy(alpha = 0.1f)
                     }
                 ) {
@@ -723,7 +737,6 @@ class VoiceInputActivity : ComponentActivity() {
                     ) {
                         when {
                             isListening -> {
-                                // Pulsing animation for listening
                                 val infiniteTransition = rememberInfiniteTransition(label = "mic_pulse")
                                 val scale by infiniteTransition.animateFloat(
                                     initialValue = 1f,
@@ -735,9 +748,9 @@ class VoiceInputActivity : ComponentActivity() {
                                     label = "pulse"
                                 )
                                 Icon(
-                                    painter = painterResource(id = android.R.drawable.ic_btn_speak_now),
+                                    painter = painterResource(id = R.drawable.mic),
                                     contentDescription = "Listening",
-                                    tint = Color.Red,
+                                    tint = Color.Red.copy(0.6f),
                                     modifier = Modifier.scale(scale)
                                 )
                             }
@@ -745,12 +758,12 @@ class VoiceInputActivity : ComponentActivity() {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(24.dp),
                                     strokeWidth = 2.dp,
-                                    color = Color(0xFFFF9800) // ✅ Orange for processing
+                                    color = Color(0xFFFF9800).copy(0.7f)
                                 )
                             }
                             else -> {
                                 Icon(
-                                    painter = painterResource(id = android.R.drawable.ic_btn_speak_now),
+                                    painter = painterResource(id = R.drawable.mic),
                                     contentDescription = "Start speaking",
                                     tint = Color(0xFF6A78C2)
                                 )
@@ -769,7 +782,7 @@ class VoiceInputActivity : ComponentActivity() {
                     ) {
                         IconButton(onClick = onSendClick) {
                             Icon(
-                                painter = painterResource(id = android.R.drawable.ic_menu_send),
+                                painter = painterResource(id = R.drawable.send_icon),
                                 contentDescription = "Send",
                                 tint = Color.White
                             )
@@ -829,17 +842,38 @@ class VoiceInputActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+
+        // ✅ ADD THIS - Tell service that activity is gone
+        sendBroadcast(Intent("com.example.heylisa.ACTIVITY_DESTROYED"))
+        Log.d("VoiceInputActivity", "🏁 Activity destroyed - notifying service")
+
         try {
             unregisterReceiver(partialReceiver)
             unregisterReceiver(stateReceiver)
         } catch (e: IllegalArgumentException) {
             Log.w("VoiceInputActivity", "Receiver not registered: ${e.message}")
         }
+    }
 
-        try {
-            sendBroadcast(Intent("com.example.heylisa.RESTORE_WAKE_WORD"))
-        } catch (e: Exception) {
-            Log.w("VoiceInputActivity", "Failed to send restore signal: ${e.message}")
+    override fun onPause() {
+        super.onPause()
+        if (isFinishing || !isAppInForeground()) {
+            sendBroadcast(Intent("com.example.heylisa.ACTIVITY_DESTROYED"))
+            Log.d("VoiceInputActivity", "🏁 Activity paused/backgrounded - notifying service")
         }
     }
+
+    private fun isAppInForeground(): Boolean {
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val appProcesses = activityManager.runningAppProcesses ?: return false
+
+        for (appProcess in appProcesses) {
+            if (appProcess.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
+                appProcess.processName == packageName) {
+                return true
+            }
+        }
+        return false
+    }
+
 }

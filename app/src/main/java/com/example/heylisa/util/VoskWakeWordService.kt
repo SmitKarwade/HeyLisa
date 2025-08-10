@@ -226,24 +226,59 @@ class VoskWakeWordService : Service() {
                     Log.d("HeyLisa", "⏳ Waiting for PROCESSING_COMPLETE before resuming")
                 }
 
+                "com.example.heylisa.ACTIVITY_DESTROYED" -> {
+                    Log.d("HeyLisa", "🏁 VoiceInputActivity destroyed - cancelling all sessions")
+
+                    isSessionActive = false
+                    inFollowUp = false
+                    isWhisperRecording = false
+                    isProcessingResult = false
+
+                    stopWhisperRecordingInternal()
+                    speechRecognitionJob?.cancel()
+                    wakeWordJob?.cancel()
+
+                    serviceScope.launch {
+                        delay(1500)
+                        if (!isShuttingDown && !isTtsSpeaking) {
+                            Log.d("HeyLisa", "🔄 Returning to wake word detection after activity destruction")
+                            startWakeWordDetection()
+                        }
+                    }
+                }
+
+
                 "com.example.heylisa.PROCESSING_COMPLETE" -> {
                     isProcessingResult = false
                     val expectFollowUp = intent?.getBooleanExtra("expect_follow_up", true) ?: true
                     Log.d("HeyLisa", "📥 PROCESSING_COMPLETE (expectFollowUp=$expectFollowUp)")
 
-                    // ✅ ADD THIS CRITICAL CLEANUP
+                    // ✅ Always stop whisper first
                     stopWhisperRecording()
 
                     if (!isShuttingDown && !isTtsSpeaking) {
                         if (expectFollowUp) {
-                            Log.d("HeyLisa", "🔄 Starting follow-up listening")
-                            serviceScope.launch {
-                                delay(800)
-                                startFollowUpWhisperListening()
+                            // ✅ CHECK if activity is still active before starting follow-up
+                            if (isAppInForeground() && isSessionActive) {
+                                Log.d("HeyLisa", "🔄 Starting follow-up listening - app in foreground")
+                                serviceScope.launch {
+                                    delay(800)
+                                    startFollowUpWhisperListening()
+                                }
+                            } else {
+                                Log.d("HeyLisa", "🏁 Activity not in foreground - returning to wake word detection")
+                                isSessionActive = false
+                                inFollowUp = false
+                                isWhisperRecording = false
+                                speechRecognitionJob?.cancel()
+
+                                serviceScope.launch {
+                                    delay(800)
+                                    startWakeWordDetection()
+                                }
                             }
                         } else {
                             Log.d("HeyLisa", "🏁 No follow-up requested – back to wake word")
-
                             isSessionActive = false
                             inFollowUp = false
                             isWhisperRecording = false
@@ -361,6 +396,7 @@ class VoskWakeWordService : Service() {
             addAction(CustomTtsService.TTS_ERROR)
             addAction("com.example.heylisa.PROCESSING_STARTED")
             addAction("com.example.heylisa.PROCESSING_COMPLETE")
+            addAction("com.example.heylisa.ACTIVITY_DESTROYED")
             addAction("com.example.heylisa.RESTORE_WAKE_WORD")
             addAction("com.example.heylisa.FORCE_RESTART")
             addAction(ACTION_START_SPEECH_RECOGNITION)
@@ -1378,9 +1414,21 @@ class VoskWakeWordService : Service() {
         }
     }
 
-    @RequiresPermission(android.Manifest.permission.RECORD_AUDIO)
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private suspend fun startFollowUpWhisperListening() {
         Log.d("HeyLisa", "🎤 [DEBUG-1] Starting follow-up Whisper listening session")
+
+        if (!isAppInForeground()) {
+            Log.w("HeyLisa", "🛑 Cannot start follow-up - app not in foreground")
+            endWhisperSession()
+            return
+        }
+
+        if (isListening) {
+            Log.e("HeyLisa", "🚨 BUG: Wake word detection active - cancelling follow-up")
+            endWhisperSession()
+            return
+        }
 
         if (isShuttingDown || isTtsSpeaking) {
             Log.w("HeyLisa", "🛑 Cannot start follow-up - shutting down: $isShuttingDown, TTS: $isTtsSpeaking")
@@ -1396,7 +1444,6 @@ class VoskWakeWordService : Service() {
             speechRecognitionMutex.withLock {
                 Log.d("HeyLisa", "🔓 [DEBUG-4] Mutex acquired successfully")
 
-                // ✅ Check current job state before cleanup
                 val currentJobState = speechRecognitionJob?.let {
                     "isActive=${it.isActive}, isCancelled=${it.isCancelled}, isCompleted=${it.isCompleted}"
                 } ?: "null"
@@ -1411,22 +1458,21 @@ class VoskWakeWordService : Service() {
                     speechRecognitionJob?.cancel()
                     Log.d("HeyLisa", "🔄 [DEBUG-8] speechRecognitionJob cancelled")
 
-                    // ✅ Add timeout to join() to prevent infinite wait
                     try {
-                        withTimeout(3000L) { // 3 second timeout
+                        withTimeout(3000L) {
                             speechRecognitionJob?.join()
                             Log.d("HeyLisa", "🔄 [DEBUG-9] speechRecognitionJob joined successfully")
                         }
                     } catch (e: TimeoutCancellationException) {
                         Log.w("HeyLisa", "⚠️ [DEBUG-9a] Job join timed out, continuing anyway")
-                        speechRecognitionJob = null // Force reset
+                        speechRecognitionJob = null
                     }
                 } else {
                     Log.d("HeyLisa", "🔄 [DEBUG-10] No cleanup needed")
                 }
 
-                if (isShuttingDown) {
-                    Log.w("HeyLisa", "🛑 [DEBUG-11] Service shutting down, aborting follow-up")
+                if (isShuttingDown || !isAppInForeground()) {
+                    Log.w("HeyLisa", "🛑 [DEBUG-11] Service shutting down or app backgrounded, aborting follow-up")
                     inFollowUp = false
                     return@withLock
                 }
@@ -1442,16 +1488,15 @@ class VoskWakeWordService : Service() {
                 }
 
                 try {
-                    Log.d("HeyLisa", "🔄 [DEBUG-13] Resetting session state")
-                    isSessionActive = false
+                    Log.d("HeyLisa", "🔄 [DEBUG-13] Keeping session active for follow-up")
+                    isSessionActive = true  // ✅ This was the critical bug!
 
                     Log.d("HeyLisa", "🚀 [DEBUG-14] About to call startWhisperRecording()")
                     startWhisperRecordingWithoutMutex()
                     Log.d("HeyLisa", "✅ [DEBUG-15] startWhisperRecording() completed")
 
-                    // Monitor the recording session
                     Log.d("HeyLisa", "👁️ [DEBUG-16] Starting monitoring loop")
-                    while (isSessionActive && !isShuttingDown && isWhisperRecording) {
+                    while (isSessionActive && !isShuttingDown && isWhisperRecording && isAppInForeground()) {
                         Log.d("HeyLisa", "👁️ [DEBUG-17] Monitoring - Active: $isSessionActive, Recording: $isWhisperRecording")
                         delay(1_000L)
                     }
@@ -1474,6 +1519,7 @@ class VoskWakeWordService : Service() {
         } catch (e: Exception) {
             Log.e("HeyLisa", "💥 [DEBUG-22] Exception in follow-up listening", e)
             inFollowUp = false
+            endWhisperSession()
         }
     }
 
@@ -1544,13 +1590,18 @@ class VoskWakeWordService : Service() {
                     return@launch
                 }
 
-                // ✅ Stop wake word detection first
+                // ✅ CRITICAL FIX - Set session active for manual start
+                isSessionActive = true
+                inFollowUp = false
+                Log.d("HeyLisa", "✅ Set session active for manual speech start")
+
+                // Stop wake word detection first
                 if (isListening) {
                     Log.d("HeyLisa", "🛑 Stopping wake word detection for manual speech")
                     stopListening()
                 }
 
-                // ✅ Use mutex to ensure proper synchronization
+                // Use mutex to ensure proper synchronization
                 speechRecognitionMutex.withLock {
                     if (isWhisperRecording || speechRecognitionJob?.isActive == true) {
                         Log.d("HeyLisa", "🔄 Stopping existing recording for manual start")
@@ -1571,6 +1622,8 @@ class VoskWakeWordService : Service() {
 
             } catch (e: Exception) {
                 Log.e("HeyLisa", "Failed to start manual Whisper recording", e)
+                // ✅ Reset session on failure
+                isSessionActive = false
                 sendBroadcast(Intent("com.example.heylisa.SPEECH_START_ERROR").apply {
                     putExtra("error", e.message)
                 })
