@@ -43,6 +43,7 @@ import com.example.heylisa.viewmodel.EmailViewModel
 import com.example.heylisa.viewmodel.ChatViewModel
 import com.example.heylisa.model.ChatMessage
 import com.example.heylisa.model.ChatState
+import com.example.heylisa.model.DeliveryStatus
 import com.example.heylisa.model.MessageType
 import com.example.heylisa.request.DraftResponse
 import com.example.heylisa.service.CustomTtsService
@@ -199,6 +200,9 @@ class VoiceInputActivity : ComponentActivity() {
         val chatState by chatViewModel.chatState.collectAsState()
         val uiState by emailViewModel.uiState.collectAsState()
 
+        // ✅ Track current processing message ID
+        var currentProcessingMessageId by remember { mutableStateOf<String?>(null) }
+
         // Handle wake word launch or manual trigger
         LaunchedEffect(Unit) {
             val isFromWakeWord = intent?.getBooleanExtra("launched_from_wake_word", false) ?: false
@@ -209,37 +213,51 @@ class VoiceInputActivity : ComponentActivity() {
             }
         }
 
-        LaunchedEffect(Unit) {
-            val isFromWakeWord = intent?.getBooleanExtra("launched_from_wake_word", false) ?: false
-            val isManualTrigger = intent?.getBooleanExtra("manual_trigger", false) ?: false
-
-            if (isFromWakeWord || isManualTrigger) {
-                chatViewModel.showChatDialog()
-
-                if (isManualTrigger) {
-                    Log.d("VoiceInputActivity", "🔄 Triggered from manual swipe - showing chat dialog")
-                }
-            }
-        }
-
         // Handle email processing results
         LaunchedEffect(uiState.navigationEvent) {
             uiState.navigationEvent?.let { event ->
                 when (event) {
+                    // In your email processing results handler
                     is EmailViewModel.NavigationEvent.ShowSuccess -> {
-                        // ✅ Check if it's an email draft creation
-                        if (event.message.contains("draft", ignoreCase = true)) {
-                            // Get the actual draft content instead of showing generic message
-                            uiState.currentDraft?.let { draft ->
-                                val emailContent = formatEmailForChat(draft)
-                                chatViewModel.addEmailDraftMessage(emailContent)
-                            }
-                        } else {
-                            chatViewModel.addAssistantMessage("✅ ${event.message}")
+                        // Update delivery status
+                        currentProcessingMessageId?.let { messageId ->
+                            chatViewModel.updateMessageDeliveryStatus(messageId, DeliveryStatus.DELIVERED)
                         }
+
+                        // ✅ Enhanced success message handling
+                        val successMessage = when {
+                            event.message.contains("sent", ignoreCase = true) -> "✅ Email sent successfully!"
+                            event.message.contains("draft", ignoreCase = true) -> {
+                                // Handle draft creation
+                                uiState.currentDraft?.let { draft ->
+                                    val emailContent = formatEmailForChat(draft)
+                                    chatViewModel.addEmailDraftMessage(emailContent)
+                                }
+                                return@let // Don't add additional message for drafts
+                            }
+                            event.message.contains("delivered", ignoreCase = true) -> "✅ Email delivered successfully!"
+                            else -> "✅ ${event.message}"
+                        }
+
+                        chatViewModel.addAssistantMessage(successMessage)
+                        currentProcessingMessageId = null
                     }
+
                     is EmailViewModel.NavigationEvent.ShowError -> {
-                        chatViewModel.addAssistantMessage("❌ ${event.message}")
+                        // ✅ Update message delivery status to FAILED
+                        currentProcessingMessageId?.let { messageId ->
+                            chatViewModel.updateMessageDeliveryStatus(messageId, DeliveryStatus.FAILED)
+                        }
+
+                        // Check if it's an email sending error
+                        if (event.message.contains("email", ignoreCase = true) ||
+                            event.message.contains("send", ignoreCase = true)) {
+                            chatViewModel.addAssistantMessage("❌ Failed to send email: ${event.message}")
+                        } else {
+                            chatViewModel.addAssistantMessage("❌ ${event.message}")
+                        }
+
+                        currentProcessingMessageId = null
                     }
                     else -> {
                         // Handle other navigation events
@@ -250,10 +268,14 @@ class VoiceInputActivity : ComponentActivity() {
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            // Chat Dialog
+            // ✅ Updated ChatDialog call with new parameters
             ChatDialog(
                 chatViewModel = chatViewModel,
                 emailViewModel = emailViewModel,
+                currentProcessingMessageId = currentProcessingMessageId,
+                onMessageSent = { messageId ->
+                    currentProcessingMessageId = messageId
+                },
                 onDismiss = {
                     chatViewModel.hideChatDialog(context)
                     finish()
@@ -264,9 +286,10 @@ class VoiceInputActivity : ComponentActivity() {
 
     private fun formatEmailForChat(draft: DraftResponse): String {
         return buildString {
-            appendLine("📧 Email Draft Created")
+            appendLine("Email Draft Created")
             appendLine()
             appendLine("To: ${draft.to ?: "Not specified"}")
+            appendLine()
             appendLine("Subject: ${draft.subject ?: "No subject"}")
             appendLine()
             appendLine("Message:")
@@ -278,6 +301,8 @@ class VoiceInputActivity : ComponentActivity() {
     fun ChatDialog(
         chatViewModel: ChatViewModel,
         emailViewModel: EmailViewModel,
+        currentProcessingMessageId: String?,
+        onMessageSent: (String) -> Unit,
         onDismiss: () -> Unit
     ) {
         val chatState by chatViewModel.chatState.collectAsState()
@@ -313,6 +338,8 @@ class VoiceInputActivity : ComponentActivity() {
                         chatState = chatState,
                         chatViewModel = chatViewModel,
                         emailViewModel = emailViewModel,
+                        currentProcessingMessageId = currentProcessingMessageId,
+                        onMessageSent = onMessageSent,
                         onClose = onDismiss
                     )
                 }
@@ -325,6 +352,8 @@ class VoiceInputActivity : ComponentActivity() {
         chatState: ChatState,
         chatViewModel: ChatViewModel,
         emailViewModel: EmailViewModel,
+        currentProcessingMessageId: String?,
+        onMessageSent: (String) -> Unit,
         onClose: () -> Unit
     ) {
         val context = LocalContext.current
@@ -366,7 +395,9 @@ class VoiceInputActivity : ComponentActivity() {
                 },
                 onSendClick = {
                     if (chatState.currentInput.isNotEmpty()) {
-                        chatViewModel.addUserMessage(chatState.currentInput)
+                        // ✅ Track the message ID for delivery status
+                        val messageId = chatViewModel.addUserMessage(chatState.currentInput)
+                        messageId?.let { onMessageSent(it) }
                         emailViewModel.processUserInput(context, chatState.currentInput)
                     }
                 }
@@ -526,7 +557,7 @@ class VoiceInputActivity : ComponentActivity() {
                 ),
                 color = when {
                     message.isFromUser -> Color(0xFF6A78C2)
-                    message.messageType == MessageType.EMAIL_DRAFT -> Color(0xFFE8F4FD) // Light blue for emails
+                    message.messageType == MessageType.EMAIL_DRAFT -> Color(0xFFE8F4FD)
                     else -> MaterialTheme.colorScheme.surfaceVariant
                 }
             ) {
@@ -538,26 +569,94 @@ class VoiceInputActivity : ComponentActivity() {
                         style = MaterialTheme.typography.bodyMedium,
                         color = when {
                             message.isFromUser -> Color.White
-                            message.messageType == MessageType.EMAIL_DRAFT -> Color(0xFF1976D2) // Darker blue for email text
+                            message.messageType == MessageType.EMAIL_DRAFT -> Color(0xFF1976D2)
                             else -> MaterialTheme.colorScheme.onSurface
                         }
                     )
 
-                    Text(
-                        text = message.getFormattedTime(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (message.isFromUser) {
-                            Color.White.copy(alpha = 0.7f)
-                        } else {
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                        },
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
+                    // ✅ Bottom row with time and delivery status
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = message.getFormattedTime(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (message.isFromUser) {
+                                Color.White.copy(alpha = 0.7f)
+                            } else {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            }
+                        )
+
+                        // ✅ Add delivery ticks for user messages only
+                        if (message.isFromUser) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            DeliveryTicks(
+                                status = message.deliveryStatus,
+                                modifier = Modifier
+                            )
+                        }
+                    }
                 }
             }
 
             if (!message.isFromUser) {
                 Spacer(modifier = Modifier.width(48.dp))
+            }
+        }
+    }
+
+    // Add this to your VoiceInputActivity.kt
+
+    @Composable
+    fun DeliveryTicks(
+        status: DeliveryStatus,
+        modifier: Modifier = Modifier
+    ) {
+        when (status) {
+            DeliveryStatus.SENT -> {
+                // Single tick
+                Icon(
+                    painter = painterResource(id = android.R.drawable.ic_menu_agenda), // You can use a better tick icon
+                    contentDescription = "Sent",
+                    modifier = modifier.size(12.dp),
+                    tint = Color.White.copy(alpha = 0.7f)
+                )
+            }
+            DeliveryStatus.DELIVERED -> {
+                // Double tick
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy((-4).dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_menu_agenda),
+                        contentDescription = "Delivered",
+                        modifier = modifier.size(12.dp),
+                        tint = Color.Blue.copy(alpha = 0.8f) // Blue ticks for delivered
+                    )
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_menu_agenda),
+                        contentDescription = "Delivered",
+                        modifier = modifier.size(12.dp),
+                        tint = Color.Blue.copy(alpha = 0.8f)
+                    )
+                }
+            }
+            DeliveryStatus.FAILED -> {
+                // Red exclamation for failed
+                Icon(
+                    painter = painterResource(id = android.R.drawable.ic_dialog_alert),
+                    contentDescription = "Failed",
+                    modifier = modifier.size(12.dp),
+                    tint = Color.Red.copy(alpha = 0.8f)
+                )
+            }
+            DeliveryStatus.NONE -> {
+                // No indicator for assistant messages
             }
         }
     }
@@ -595,9 +694,9 @@ class VoiceInputActivity : ComponentActivity() {
                             text = when {
                                 isListening -> "Listening..."
                                 isProcessing -> "Processing..."
-                                else -> "Type or speak your message..."
+                                else -> "Type or speak..."
                             },
-                            color = Color.Black.copy(0.6f)
+                            color = Color.Black.copy(0.5f)
                         )
                     },
                     enabled = !isListening && !isProcessing,
