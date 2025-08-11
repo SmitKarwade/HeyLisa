@@ -100,7 +100,7 @@ class VoiceInputActivity : ComponentActivity() {
                     val error = intent.getStringExtra("error") ?: "Unknown error"
                     Log.e("VoiceInputActivity", "Speech start error: $error")
                     if (::chatViewModel.isInitialized) {
-                        chatViewModel.addAssistantMessage("❌ Sorry, I couldn't start listening: $error")
+                        chatViewModel.addAssistantMessage("Sorry, I couldn't start listening: $error")
                     }
                 }
             }
@@ -254,9 +254,9 @@ class VoiceInputActivity : ComponentActivity() {
                         // Check if it's an email sending error
                         if (event.message.contains("email", ignoreCase = true) ||
                             event.message.contains("send", ignoreCase = true)) {
-                            chatViewModel.addAssistantMessage("❌ Failed to send email: ${event.message}")
+                            chatViewModel.addAssistantMessage("Failed to send email: ${event.message}")
                         } else {
-                            chatViewModel.addAssistantMessage("❌ ${event.message}")
+                            chatViewModel.addAssistantMessage("${event.message}")
                         }
 
                         currentProcessingMessageId = null

@@ -381,7 +381,7 @@ class EmailViewModel(
                         )
                         speak(errorMessage)
                         // ✅ Processing complete will be sent after TTS finishes
-                        Log.e("EmailViewModel", "❌ Draft creation failed: ${result.message}")
+                        Log.e("EmailViewModel", "Draft creation failed: ${result.message}")
                     }
                 }
             }
@@ -444,7 +444,7 @@ class EmailViewModel(
                         )
                         speak(errorMessage)
                         // ✅ Processing complete will be sent after TTS finishes
-                        Log.e("EmailViewModel", "❌ Draft editing failed: ${result.message}")
+                        Log.e("EmailViewModel", "Draft editing failed: ${result.message}")
                     }
                 }
             }
@@ -485,7 +485,7 @@ class EmailViewModel(
                         )
 
                         speak(errorMessage)
-                        Log.e("EmailViewModel", "❌ Email send failed: ${result.message}")
+                        Log.e("EmailViewModel", "Email send failed: ${result.message}")
                     }
                 }
             }
