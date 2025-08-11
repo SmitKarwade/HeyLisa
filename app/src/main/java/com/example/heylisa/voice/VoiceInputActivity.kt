@@ -21,6 +21,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -527,11 +528,21 @@ class VoiceInputActivity : ComponentActivity() {
         LazyColumn(
             modifier = modifier,
             state = listState,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            items(messages) { message ->
-                ChatMessageBubble(message = message)
+            itemsIndexed(messages) { index, message ->
+                val previousMessage = if (index > 0) messages[index - 1] else null
+                val senderChanged = previousMessage?.isFromUser != message.isFromUser
+
+                Column {
+                    when {
+                        index == 0 -> Unit
+                        senderChanged -> Spacer(modifier = Modifier.height(20.dp))
+                        else -> Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    ChatMessageBubble(message = message)
+                }
             }
         }
     }
@@ -542,11 +553,11 @@ class VoiceInputActivity : ComponentActivity() {
             val contentLength = message.content.length
             when {
                 message.messageType == MessageType.EMAIL_DRAFT -> 320.dp
-                contentLength <= 3 -> 80.dp    // "Hi", "Yes", "No"
-                contentLength <= 10 -> 120.dp  // "Thank you", "Okay"
-                contentLength <= 25 -> 180.dp  // Short sentences
-                contentLength <= 50 -> 240.dp  // Medium sentences
-                else -> 280.dp                 // Long messages
+                contentLength <= 3 -> 80.dp
+                contentLength <= 10 -> 120.dp
+                contentLength <= 25 -> 180.dp
+                contentLength <= 50 -> 240.dp
+                else -> 280.dp
             }
         }
 

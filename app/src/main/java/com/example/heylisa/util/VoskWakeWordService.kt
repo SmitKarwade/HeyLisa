@@ -92,7 +92,7 @@ class VoskWakeWordService : Service() {
         const val MAX_RECORDING_DURATION_MS = 60_000L
         const val MIN_RECORDING_DURATION_MS = 1_000L
         const val SILENCE_THRESHOLD_MS = 3_000L
-        const val VOICE_ACTIVITY_THRESHOLD = 800
+        const val VOICE_ACTIVITY_THRESHOLD = 600
         const val NO_VOICE_TIMEOUT_MS = 10_000L
     }
 
@@ -956,23 +956,31 @@ class VoskWakeWordService : Service() {
 
 
     private fun logVoiceActivityForTuning(buffer: ByteArray) {
+        if (buffer.size < 2) return
+
         var sum = 0L
         var maxSample = 0
+        var samples = 0
 
         for (i in buffer.indices step 2) {
             if (i + 1 < buffer.size) {
-                val sample = (buffer[i].toInt() and 0xFF) or ((buffer[i + 1].toInt() and 0xFF) shl 8)
+                val sample = ((buffer[i + 1].toInt() shl 8) or (buffer[i].toInt() and 0xFF)).toShort().toInt()
                 val absoluteSample = kotlin.math.abs(sample)
+
                 sum += (absoluteSample * absoluteSample).toLong()
                 maxSample = kotlin.math.max(maxSample, absoluteSample)
+                samples++
             }
         }
 
-        val rms = kotlin.math.sqrt(sum.toDouble() / (buffer.size / 2))
+        if (samples == 0) return
 
-        // ✅ Log every 10th reading to avoid spam
-        if (System.currentTimeMillis() % 500 < 50) { // Log every ~500ms
-            Log.d("HeyLisa", "🔊 Audio levels - RMS: ${rms.toInt()}, Max: $maxSample, Threshold: $VOICE_ACTIVITY_THRESHOLD")
+        val rms = kotlin.math.sqrt(sum.toDouble() / samples)
+
+        if (System.currentTimeMillis() % 500 < 50) {
+            if (rms > 50 || maxSample > 100) { // Only log when there's actual audio
+                Log.d("HeyLisa", "🔊 Audio levels - RMS: ${rms.toInt()}, Max: $maxSample, Threshold: $VOICE_ACTIVITY_THRESHOLD")
+            }
         }
     }
 
@@ -1321,21 +1329,23 @@ class VoskWakeWordService : Service() {
     }
 
     private fun checkPhoneticSimilarity(text: String): Boolean {
-        // Remove spaces and normalize
         val normalized = text.replace("\\s+".toRegex(), "").lowercase()
 
-        // Target patterns we're looking for
         val targetPatterns = listOf(
             "heylisa", "heyalisa", "healisa", "healy", "elisa", "alisa",
             "hilisa", "helisa", "heeli", "heli", "hele", "hesa"
         )
 
         for (target in targetPatterns) {
-            // Calculate edit distance (simple implementation)
             val distance = calculateEditDistance(normalized, target)
             val similarity = 1.0 - (distance.toDouble() / maxOf(normalized.length, target.length))
 
-            if (similarity >= 0.7) { // 70% similarity threshold
+            if (similarity >= 0.85 &&
+                normalized.length >= 4 && // Minimum length
+                (normalized.contains("lisa", ignoreCase = true) ||
+                        normalized.contains("hey", ignoreCase = true) ||
+                        normalized.contains("hi", ignoreCase = true))) {
+
                 Log.d("HeyLisa", "📊 Phonetic match: '$normalized' ≈ '$target' (${(similarity * 100).toInt()}% similar)")
                 return true
             }
@@ -1343,6 +1353,7 @@ class VoskWakeWordService : Service() {
 
         return false
     }
+
 
     private fun calculateEditDistance(s1: String, s2: String): Int {
         val dp = Array(s1.length + 1) { IntArray(s2.length + 1) }
